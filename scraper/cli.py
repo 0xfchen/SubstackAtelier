@@ -271,14 +271,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Allow monkeypatched globals from the scraper package/module
-    scraper_module = sys.modules.get("scraper")
-    base_content_dir = (
-        getattr(scraper_module, "BASE_CONTENT_DIR", BASE_CONTENT_DIR) if scraper_module else BASE_CONTENT_DIR
-    )
-
     if args.directory is None:
-        args.directory = base_content_dir
+        args.directory = BASE_CONTENT_DIR
 
     page_fetcher = _build_page_fetcher(args)
     with contextlib.ExitStack() as exit_stack:

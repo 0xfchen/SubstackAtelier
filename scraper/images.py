@@ -4,11 +4,9 @@ import mimetypes
 import os
 import random
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import sleep
-from typing import Any
 from urllib.parse import unquote
 
 import requests
@@ -20,12 +18,6 @@ from scraper.config import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _get_requests() -> Any:
-    """Retrieve requests module or monkeypatched version from sys.modules."""
-    scraper_module = sys.modules.get("scraper") or sys.modules.get("substack_scraper")
-    return getattr(scraper_module, "requests", requests) if scraper_module else requests
 
 
 def resolve_image_url(url: str) -> str:
@@ -103,9 +95,8 @@ def sanitize_image_filename(url: str, timeout: int = 5) -> str:
     valid_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
 
     if extension not in valid_extensions:
-        request_module = _get_requests()
         try:
-            response = request_module.head(url, timeout=timeout, allow_redirects=True)
+            response = requests.head(url, timeout=timeout, allow_redirects=True)
             content_type = response.headers.get("content-type", "").split(";")[0].strip()
             guessed_extension = mimetypes.guess_extension(content_type)
             if guessed_extension in valid_extensions:
@@ -145,10 +136,9 @@ def download_image(
     Returns:
         str | None: String path to the saved file on success, or None on failure.
     """
-    request_module = _get_requests()
     for attempt in range(1, max_retries + 1):
         try:
-            response = request_module.get(url, stream=True, timeout=timeout)
+            response = requests.get(url, stream=True, timeout=timeout)
             if response.status_code == 200:
                 save_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(save_path, "wb") as f:
@@ -200,13 +190,6 @@ def download_image(
     return None
 
 
-def _call_download_image(*args: Any, **kwargs: Any) -> str | None:
-    """Invoke download_image with support for module-level test patches."""
-    scraper_module = sys.modules.get("scraper") or sys.modules.get("substack_scraper")
-    downloader = getattr(scraper_module, "download_image", download_image) if scraper_module else download_image
-    return downloader(*args, **kwargs)
-
-
 def process_markdown_images(
     md_content: str,
     author: str,
@@ -228,11 +211,7 @@ def process_markdown_images(
     Returns:
         str: Updated markdown content with CDN links replaced by relative paths.
     """
-    scraper_module = sys.modules.get("scraper") or sys.modules.get("substack_scraper")
-    current_content_dir = (
-        getattr(scraper_module, "BASE_CONTENT_DIR", BASE_CONTENT_DIR) if scraper_module else BASE_CONTENT_DIR
-    )
-    target_content_dir = Path(base_content_dir or current_content_dir)
+    target_content_dir = Path(base_content_dir or BASE_CONTENT_DIR)
 
     author_dir = target_content_dir / author
     image_dir = author_dir / "images" / post_slug
@@ -258,7 +237,7 @@ def process_markdown_images(
         workers = min(len(download_tasks), max(1, max_workers))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_path = {
-                executor.submit(_call_download_image, resolved_url, save_path, pbar): save_path
+                executor.submit(download_image, resolved_url, save_path, pbar): save_path
                 for resolved_url, save_path in download_tasks
             }
             for future in future_to_path:

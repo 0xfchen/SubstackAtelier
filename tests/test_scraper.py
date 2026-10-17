@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 import scraper
-from scraper import discovery, extract, frontmatter, storage, sync
+from scraper import config, discovery, extract, frontmatter, images, storage, sync, url_utils
 from scraper.fetchers import PageFetcher, PlaywrightFetcher, RequestsFetcher, rate_limit
 
 
@@ -35,15 +35,29 @@ class FakeScraper(scraper.SubstackScraper):
         overwrite: bool = False,
         clean_content: bool = True,
         fetcher: PageFetcher | None = None,
+        post_urls: list[str] | None = None,
     ) -> None:
-        super().__init__(
-            base_substack_url=base_substack_url,
-            fetcher=fetcher if fetcher is not None else FakeFetcher(),
-            content_save_dir=content_save_dir,
-            download_images=download_images,
-            overwrite=overwrite,
-            clean_content=clean_content,
-        )
+        if not url_utils.is_post_url(base_substack_url):
+            with patch("scraper.substack.discover_post_urls", return_value=post_urls or []):
+                super().__init__(
+                    base_substack_url=base_substack_url,
+                    fetcher=fetcher if fetcher is not None else FakeFetcher(),
+                    content_save_dir=content_save_dir,
+                    download_images=download_images,
+                    overwrite=overwrite,
+                    clean_content=clean_content,
+                )
+        else:
+            super().__init__(
+                base_substack_url=base_substack_url,
+                fetcher=fetcher if fetcher is not None else FakeFetcher(),
+                content_save_dir=content_save_dir,
+                download_images=download_images,
+                overwrite=overwrite,
+                clean_content=clean_content,
+            )
+        if post_urls is not None:
+            self.post_urls = post_urls
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +71,7 @@ def test_resolve_image_url_extracts_original_url():
         "fl_progressive:steep/https%3A%2F%2Fbucket.s3.us-west-2.amazonaws.com%2Fimage.jpg"
     )
 
-    assert scraper.resolve_image_url(cdn_url) == "https://bucket.s3.us-west-2.amazonaws.com/image.jpg"
+    assert images.resolve_image_url(cdn_url) == "https://bucket.s3.us-west-2.amazonaws.com/image.jpg"
 
 
 def test_sanitize_image_filename_uses_resolved_url_name():
@@ -66,13 +80,13 @@ def test_sanitize_image_filename_uses_resolved_url_name():
         "fl_progressive:steep/https%3A%2F%2Fbucket.s3.us-west-2.amazonaws.com%2Fimage.jpg%3Fv%3D1"
     )
 
-    assert scraper.sanitize_image_filename(cdn_url) == "image.jpg"
+    assert images.sanitize_image_filename(cdn_url) == "image.jpg"
 
 
 def test_count_images_in_markdown_counts_cleaned_linked_images():
     markdown = "[![alt](https://cdn/a.png)](https://example.com)\n\n![plain](https://cdn/b.png)"
 
-    assert scraper.count_images_in_markdown(markdown) == 2
+    assert images.count_images_in_markdown(markdown) == 2
 
 
 def test_single_post_url_initializes_without_fetching_all_posts(tmp_path):
@@ -149,7 +163,7 @@ def test_parse_args_supports_images_flag(monkeypatch):
     ],
 )
 def test_clean_linked_images(input_md, expected):
-    assert scraper.clean_linked_images(input_md) == expected
+    assert images.clean_linked_images(input_md) == expected
 
 
 # 2. test_resolve_image_url_passthrough
@@ -162,7 +176,7 @@ def test_resolve_image_url_passthrough():
         "/relative/path/image.png",
     ]
     for url in urls:
-        assert scraper.resolve_image_url(url) == url
+        assert images.resolve_image_url(url) == url
 
 
 # 3. test_is_post_url
@@ -177,7 +191,7 @@ def test_resolve_image_url_passthrough():
     ],
 )
 def test_is_post_url(url, expected):
-    assert scraper.is_post_url(url) == expected
+    assert url_utils.is_post_url(url) == expected
 
 
 # 4. test_get_publication_url
@@ -190,7 +204,7 @@ def test_is_post_url(url, expected):
     ],
 )
 def test_get_publication_url(url, expected):
-    assert scraper.get_publication_url(url) == expected
+    assert url_utils.get_publication_url(url) == expected
 
 
 # 5. test_get_post_slug
@@ -204,11 +218,11 @@ def test_get_publication_url(url, expected):
     ],
 )
 def test_get_post_slug(url, expected):
-    assert scraper.get_post_slug(url) == expected
+    assert url_utils.get_post_slug(url) == expected
 
 
 # 6. test_process_markdown_images
-@patch("scraper.download_image")
+@patch("scraper.images.download_image")
 def test_process_markdown_images(mock_download):
     """Mock requests.get and verify image download + path rewriting."""
     mock_download.return_value = "data/images/testauthor/test-post/photo.jpg"
@@ -219,7 +233,7 @@ def test_process_markdown_images(mock_download):
         "More text"
     )
 
-    result = scraper.process_markdown_images(md_content, "testauthor", "test-post")
+    result = images.process_markdown_images(md_content, "testauthor", "test-post")
 
     # download_image should have been called once
     assert mock_download.call_count == 1
@@ -231,12 +245,12 @@ def test_process_markdown_images(mock_download):
 
 
 # 7. test_download_image_error_handling
-@patch("scraper.requests.get")
+@patch("scraper.images.requests.get")
 def test_download_image_error_handling(mock_get, tmp_path):
     """Mock network error, verify graceful handling (returns None)."""
     mock_get.side_effect = ConnectionError("Network unreachable")
 
-    result = scraper.download_image(
+    result = images.download_image(
         "https://example.com/image.jpg",
         tmp_path / "image.jpg",
     )
@@ -322,24 +336,12 @@ def test_youtube_embed_with_malformed_attrs_is_skipped():
 def test_clean_linked_images_preserves_youtube_thumbnail_links():
     md = "[![YouTube video](https://img.youtube.com/vi/abc/hqdefault.jpg)](https://www.youtube.com/watch?v=abc)"
 
-    assert scraper.clean_linked_images(md) == md
-
-
-# 12. Security & XSS Prevention
-def test_safe_json_embed_escapes_html_tags():
-    payload = {"title": "</script><script>alert(1)</script>", "data": "a & b < c > d"}
-    embedded = scraper.safe_json_embed(payload)
-
-    assert "</script>" not in embedded
-    assert "<" not in embedded
-    assert ">" not in embedded
-    assert "\\u003c/script\\u003e" in embedded
-    assert "\\u0026" in embedded
+    assert images.clean_linked_images(md) == md
 
 
 # 13. CLI & Defaults
 def test_default_use_premium_is_false():
-    assert scraper.USE_PREMIUM is False
+    assert config.USE_PREMIUM is False
 
 
 def test_main_bare_command_shows_help_and_exits(monkeypatch, capsys):
@@ -355,10 +357,10 @@ def test_main_bare_command_shows_help_and_exits(monkeypatch, capsys):
 # 14. Network Timeouts & Reliability
 def test_process_markdown_images_preserves_remote_url_on_download_failure(monkeypatch):
     # Mock download_image to fail (return None)
-    monkeypatch.setattr(scraper, "download_image", lambda *args, **kwargs: None)
+    monkeypatch.setattr("scraper.images.download_image", lambda *args, **kwargs: None)
 
     md = "![alt](https://substackcdn.com/image/fetch/w_1456/https%3A%2F%2Fexample.com%2Ffailed.jpg)"
-    result = scraper.process_markdown_images(md, "test_author", "test_slug")
+    result = images.process_markdown_images(md, "test_author", "test_slug")
 
     # URL should be retained rather than replaced with broken local path
     assert "https://substackcdn.com/image/fetch/" in result
@@ -366,10 +368,12 @@ def test_process_markdown_images_preserves_remote_url_on_download_failure(monkey
 
 
 def test_download_image_uses_timeout(monkeypatch, tmp_path):
-    mock_get = Mock(side_effect=scraper.requests.Timeout("Connection timed out"))
-    monkeypatch.setattr(scraper.requests, "get", mock_get)
+    import requests
 
-    result = scraper.download_image("https://example.com/img.jpg", tmp_path / "img.jpg", timeout=12, max_retries=1)
+    mock_get = Mock(side_effect=requests.Timeout("Connection timed out"))
+    monkeypatch.setattr("scraper.images.requests.get", mock_get)
+
+    result = images.download_image("https://example.com/img.jpg", tmp_path / "img.jpg", timeout=12, max_retries=1)
     assert result is None
     mock_get.assert_called_once()
     assert mock_get.call_args[1]["timeout"] == 12
@@ -400,7 +404,7 @@ def test_download_image_uses_timeout(monkeypatch, tmp_path):
     ],
 )
 def test_extract_main_part_supports_custom_domains(url, expected):
-    assert scraper.extract_main_part(url) == expected
+    assert url_utils.extract_main_part(url) == expected
 
 
 # 16. Concurrency & Performance
@@ -411,7 +415,7 @@ def test_process_markdown_images_concurrent_downloads(monkeypatch):
         downloaded_urls.append(url)
         return str(save_path)
 
-    monkeypatch.setattr(scraper, "download_image", mock_download)
+    monkeypatch.setattr("scraper.images.download_image", mock_download)
 
     md = (
         "![img1](https://substackcdn.com/image/fetch/w_1456/https%3A%2F%2Fexample.com%2F1.jpg)\n"
@@ -419,7 +423,7 @@ def test_process_markdown_images_concurrent_downloads(monkeypatch):
         "![img3](https://substackcdn.com/image/fetch/w_1456/https%3A%2F%2Fexample.com%2F3.jpg)\n"
     )
 
-    result = scraper.process_markdown_images(md, "author", "post", max_workers=3)
+    result = images.process_markdown_images(md, "author", "post", max_workers=3)
 
     assert len(downloaded_urls) == 3
     assert "https://example.com/1.jpg" in downloaded_urls
@@ -517,7 +521,7 @@ def test_download_image_retries_on_failure_and_succeeds(tmp_path):
         patch("scraper.images.requests.get", side_effect=[mock_resp_fail, mock_resp_ok]) as mock_get,
         patch("scraper.images.sleep") as mock_sleep,
     ):
-        result = scraper.download_image("https://example.com/retry.jpg", dest, max_retries=3)
+        result = images.download_image("https://example.com/retry.jpg", dest, max_retries=3)
 
         assert result == str(dest)
         assert mock_get.call_count == 2
@@ -534,7 +538,7 @@ def test_download_image_fails_after_max_retries(tmp_path):
         patch("scraper.images.requests.get", side_effect=[mock_resp_fail, mock_resp_fail, mock_resp_fail]) as mock_get,
         patch("scraper.images.sleep") as mock_sleep,
     ):
-        result = scraper.download_image("https://example.com/fail.jpg", dest, max_retries=3)
+        result = images.download_image("https://example.com/fail.jpg", dest, max_retries=3)
 
         assert result is None
         assert mock_get.call_count == 3
@@ -1146,7 +1150,7 @@ def test_fetch_posts_from_api_pagination_and_cutoff(monkeypatch):
             return FakeResponse([])
         return FakeResponse([], content=b"<urlset></urlset>")
 
-    monkeypatch.setattr(scraper.requests, "get", fake_get)
+    monkeypatch.setattr("scraper.sync.requests.get", fake_get)
 
     fake_scraper = FakeScraper("https://example.substack.com")
 
@@ -1171,7 +1175,7 @@ def test_fetch_posts_from_api_handles_api_failure(monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setattr(scraper.requests, "get", lambda url, timeout=30: FakeErrorResponse())
+    monkeypatch.setattr("scraper.sync.requests.get", lambda url, timeout=30: FakeErrorResponse())
 
     fake_scraper = FakeScraper("https://example.substack.com")
     result = sync.fetch_posts_from_api(fake_scraper.base_substack_url)
@@ -1493,7 +1497,7 @@ def test_discover_post_urls_uses_sitemap_and_filters_keywords(monkeypatch):
         status_code = 200
         content = sitemap_xml
 
-    monkeypatch.setattr(scraper.requests, "get", lambda url, timeout=30: FakeResponse())
+    monkeypatch.setattr("scraper.discovery.requests.get", lambda url, timeout=30: FakeResponse())
     urls = discovery.discover_post_urls("https://example.substack.com")
     assert urls == [
         "https://example.substack.com/p/first-post",
@@ -1524,7 +1528,7 @@ def test_discover_post_urls_falls_back_to_feed_when_sitemap_fails(monkeypatch):
             return FakeResponse(False, 404, b"Not Found")
         return FakeResponse(True, 200, feed_xml)
 
-    monkeypatch.setattr(scraper.requests, "get", fake_get)
+    monkeypatch.setattr("scraper.discovery.requests.get", fake_get)
     urls = discovery.discover_post_urls("https://example.substack.com")
     assert urls == [
         "https://example.substack.com/p/feed-post-1",
@@ -1598,15 +1602,16 @@ def test_scrape_single_post_dumps_debug_html_on_extraction_failure(tmp_path):
 def test_substack_scraper_context_manager_closes_fetcher():
     """Verify SubstackScraper context manager closes its fetcher normally and on exception."""
     fake_fetcher = FakeFetcher()
-    with scraper.SubstackScraper("https://example.substack.com", fetcher=fake_fetcher):
-        assert not fake_fetcher.closed
-    assert fake_fetcher.closed is True
+    with patch("scraper.substack.discover_post_urls", return_value=[]):
+        with scraper.SubstackScraper("https://example.substack.com", fetcher=fake_fetcher):
+            assert not fake_fetcher.closed
+        assert fake_fetcher.closed is True
 
-    failing_fetcher = FakeFetcher()
-    with pytest.raises(RuntimeError, match="Context error"):
-        with scraper.SubstackScraper("https://example.substack.com", fetcher=failing_fetcher):
-            raise RuntimeError("Context error")
-    assert failing_fetcher.closed is True
+        failing_fetcher = FakeFetcher()
+        with pytest.raises(RuntimeError, match="Context error"):
+            with scraper.SubstackScraper("https://example.substack.com", fetcher=failing_fetcher):
+                raise RuntimeError("Context error")
+        assert failing_fetcher.closed is True
 
 
 def test_playwright_fetcher_close_is_idempotent():
@@ -1750,3 +1755,29 @@ def test_requests_fetcher_fetch_soup_raises_value_error_on_request_exception(mon
     fetcher = RequestsFetcher()
     with pytest.raises(ValueError, match="Error fetching page"):
         fetcher.fetch_soup("https://example.substack.com/p/fail")
+
+
+def test_cli_uses_base_content_dir_by_default(monkeypatch):
+    """Verify CLI defaults to BASE_CONTENT_DIR when --directory is omitted."""
+    from scraper.cli import BASE_CONTENT_DIR, main
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["scraper", "--url", "https://example.substack.com"],
+    )
+    fake_fetcher = FakeFetcher()
+    monkeypatch.setattr("scraper.cli._build_page_fetcher", lambda args: fake_fetcher)
+
+    captured_init_kwargs = {}
+
+    def fake_init(self, **kwargs):
+        captured_init_kwargs.update(kwargs)
+        self.fetcher = kwargs.get("fetcher", fake_fetcher)
+
+    monkeypatch.setattr("scraper.cli.SubstackScraper.__init__", fake_init)
+    monkeypatch.setattr("scraper.cli.SubstackScraper.scrape_posts", Mock())
+
+    main()
+
+    assert captured_init_kwargs["content_save_dir"] == BASE_CONTENT_DIR

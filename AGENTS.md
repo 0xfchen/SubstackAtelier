@@ -1,7 +1,7 @@
 # Substack2Markdown - Project Guidelines & Context
 
 ## Project Overview
-Substack2Markdown is a modular Python package designed to scrape and archive Substack newsletters (both free and premium subscriber-only content) into Markdown and HTML formats. It also provides a local HTML catalog interface with sorting capabilities (by date or like count) and downloads images locally when requested.
+Substack2Markdown is a modular Python package designed to scrape and archive Substack newsletters (both free and premium subscriber-only content) into Markdown and HTML formats. It also provides a local Astro reader interface with full-text search and downloads images locally when requested.
 
 ## Tech Stack & Architecture
 - **Language & Standards**: Python 3.11+, PEP 8, PEP 585 (built-in generics), PEP 604 (union syntax `|`)
@@ -20,7 +20,6 @@ flowchart LR
     URLUtils["URL Parsing & Slug Utilities<br/><code>scraper/url_utils.py</code>"]
     Converter["HTML to Markdown Engine<br/><code>scraper/converter.py</code>"]
     Images["Image Pipeline & ThreadPoolExecutor<br/><code>scraper/images.py</code>"]
-    Catalog["Catalog & Safe JSON Embed<br/><code>scraper/catalog.py</code>"]
     Browser["Playwright Browser Manager<br/><code>scraper/browser.py</code>"]
     Discovery["URL Discovery Engine<br/><code>scraper/discovery.py</code>"]
     Extract["DOM Extraction & Parsing<br/><code>scraper/extract.py</code>"]
@@ -82,7 +81,6 @@ flowchart LR
         snc["sync.py<br/>Cursor & API Delta"]
         cnv["converter.py<br/>HTML to Markdown Engine"]
         img["images.py<br/>Async Download Pipeline"]
-        cat["catalog.py<br/>HTML & JSON Archiving"]
         brw["browser.py<br/>Playwright Session Manager"]
     end
 
@@ -93,7 +91,7 @@ flowchart LR
     scrp --> ftch
     ftch --> rlmt
     
-    scrp --> cfg & url & dsc & ext & fmt & strg & snc & img & cat
+    scrp --> cfg & url & dsc & ext & fmt & strg & snc & img
     ext --> cnv
     ftch --> brw
 ```
@@ -105,7 +103,7 @@ flowchart LR
 - [`scraper/frontmatter.py`](scraper/frontmatter.py): YAML frontmatter formatting (`combine_metadata_and_content`) and read-back (`extract_metadata_from_md`).
 - [`scraper/storage.py`](scraper/storage.py): Markdown file writes (`save_to_file`), sanitized filename generation, relative link resolution (`build_file_link`), and metadata JSON merging (`save_posts_data_to_json`).
 - [`scraper/sync.py`](scraper/sync.py): Incremental sync state persistence (`load_sync_state`, `save_sync_state`), ISO 8601 parsing, cutoff checks, and API delta post fetching (`fetch_posts_from_api`).
-- [`scraper/catalog.py`](scraper/catalog.py): `safe_json_embed()` (mitigating XSS vulnerabilities).
+- [`scraper/__init__.py`](scraper/__init__.py): Exposes clean public API (`SubstackScraper`, `PageFetcher`, `RequestsFetcher`, `PlaywrightFetcher`, `BrowserManager`, `convert_html_to_markdown`, `get_credentials`, `BASE_CONTENT_DIR`, `main`, `parse_args`).
 - [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, missing image alt normalization, and `normalize_markdown()`.
 - [`scraper/images.py`](scraper/images.py): Image URL resolution, filename sanitization, linked image cleanup, and parallel downloads into `content/<author>/images/<slug>/` via `ThreadPoolExecutor`.
 - [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles, and CDP attach.
