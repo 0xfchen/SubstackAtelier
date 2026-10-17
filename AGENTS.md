@@ -22,6 +22,11 @@ flowchart TD
     Images["Image Pipeline & ThreadPoolExecutor<br/><code>scraper/images.py</code>"]
     Catalog["Catalog & Safe JSON Embed<br/><code>scraper/catalog.py</code>"]
     Browser["Playwright Browser Manager<br/><code>scraper/browser.py</code>"]
+    Discovery["URL Discovery Engine<br/><code>scraper/discovery.py</code>"]
+    Extract["DOM Extraction & Parsing<br/><code>scraper/extract.py</code>"]
+    Frontmatter["YAML Frontmatter Service<br/><code>scraper/frontmatter.py</code>"]
+    Storage["Storage & Metadata Merging<br/><code>scraper/storage.py</code>"]
+    Sync["Incremental Sync State & Delta API<br/><code>scraper/sync.py</code>"]
 
     subgraph Scrapers ["Scraper Subpackage (scraper/scrapers/)"]
         BaseScraper["BaseSubstackScraper (ABC)<br/><code>scrapers/base.py</code>"]
@@ -36,11 +41,11 @@ flowchart TD
     FreeScraper -- inherits --> BaseScraper
     PremiumScraper -- inherits --> BaseScraper
     
-    BaseScraper --> URLUtils
-    BaseScraper --> Converter
-    BaseScraper --> Images
-    BaseScraper --> Catalog
-    BaseScraper --> Config
+    BaseScraper --> Discovery & Extract & Frontmatter & Storage & Sync & Images & Config & URLUtils
+    Extract --> Converter
+    Discovery --> Config
+    Sync --> Config
+    Storage --> URLUtils
     
     PremiumScraper --> Browser
     PremiumScraper --> Config
@@ -65,6 +70,11 @@ flowchart LR
     subgraph Services ["Support Modules"]
         cfg["config.py<br/>Settings & Auth"]
         url["url_utils.py<br/>Domain & Slug Parsing"]
+        dsc["discovery.py<br/>Sitemap & Feed Discovery"]
+        ext["extract.py<br/>DOM & Markdown Parsing"]
+        fmt["frontmatter.py<br/>YAML Metadata"]
+        strg["storage.py<br/>Files & Metadata JSON"]
+        snc["sync.py<br/>Cursor & API Delta"]
         cnv["converter.py<br/>HTML to Markdown Engine"]
         img["images.py<br/>Async Download Pipeline"]
         cat["catalog.py<br/>HTML & JSON Archiving"]
@@ -78,22 +88,28 @@ flowchart LR
     free --> base
     prem --> base
     
-    base --> cfg & url & cnv & img & cat
+    base --> cfg & url & dsc & ext & fmt & strg & snc & img & cat
+    ext --> cnv
     prem --> brw
 ```
 
-- [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), timeouts, and `get_credentials()` which loads from `.env` or environment variables.
-- [`scraper/url_utils.py`](scraper/url_utils.py): URL validation, publication URL extraction, and `extract_main_part()` supporting custom Substack domains (e.g. `blog.bytebytego.com`, `newsletter.pragmaticengineer.com`).
+- [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), `EXCLUDED_URL_KEYWORDS`, timeouts, and `get_credentials()` which loads from `.env` or environment variables.
+- [`scraper/url_utils.py`](scraper/url_utils.py): URL validation, publication URL extraction, `get_slug_from_url()`, and `extract_main_part()` supporting custom Substack domains (e.g. `blog.bytebytego.com`, `newsletter.pragmaticengineer.com`).
+- [`scraper/discovery.py`](scraper/discovery.py): Publication URL discovery via sitemap and RSS feed crawling (`discover_post_urls`) with keyword filtering.
+- [`scraper/extract.py`](scraper/extract.py): Substack DOM extraction, ld+json parsing, promotional widget cleaning, YouTube embed transformations, and post HTML-to-Markdown conversion (`extract_post_data`, `post_html_to_markdown`).
+- [`scraper/frontmatter.py`](scraper/frontmatter.py): YAML frontmatter formatting (`combine_metadata_and_content`) and read-back (`extract_metadata_from_md`).
+- [`scraper/storage.py`](scraper/storage.py): Markdown file writes (`save_to_file`), sanitized filename generation, relative link resolution (`build_file_link`), and metadata JSON merging (`save_posts_data_to_json`).
+- [`scraper/sync.py`](scraper/sync.py): Incremental sync state persistence (`load_sync_state`, `save_sync_state`), ISO 8601 parsing, cutoff checks, and API delta post fetching (`fetch_posts_from_api`).
 - [`scraper/catalog.py`](scraper/catalog.py): `safe_json_embed()` (mitigating XSS vulnerabilities).
-- [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, and missing image alt normalization.
+- [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, missing image alt normalization, and `normalize_markdown()`.
 - [`scraper/images.py`](scraper/images.py): Image URL resolution, filename sanitization, linked image cleanup, and parallel downloads into `content/<author>/images/<slug>/` via `ThreadPoolExecutor`.
 - [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles, and CDP attach.
-- [`scraper/scrapers/base.py`](scraper/scrapers/base.py): Abstract base class implementing URL discovery (sitemap.xml and feed.xml fallback), YouTube embed transformations, HTML-to-Markdown conversion (`convert_html_to_markdown`), promotional widget & comment button stripping (`_clean_post_html`), rich metadata extraction (`window._preloads`), and author-centric storage (`content/<author>/posts/<slug>.md` and `metadata.json`).
+- [`scraper/scrapers/base.py`](scraper/scrapers/base.py): Abstract base class coordinating orchestration, rate-limit backoff handling, and post scraping/syncing loops.
 - [`scraper/scrapers/free.py`](scraper/scrapers/free.py): Public post scraper using `requests` and `BeautifulSoup` with jittered exponential backoff on HTTP 429 errors.
 - [`scraper/scrapers/premium.py`](scraper/scrapers/premium.py): Authenticated scraper for paid posts using Playwright, supporting session redirect detection, SSR hydration waits, persistent profiles, storage_state.json, and interactive CAPTCHA completion.
 - [`scraper/cli.py`](scraper/cli.py): CLI argument parser and execution coordinator.
 - [`reader/`](reader/): Static Astro reader based on Astro Tone, ingesting `../content/**/posts/*.{md,mdx}` with full-text search (Pagefind), tag filtering, syntax highlighting, and dark mode.
-- [`tests/test_scraper.py`](tests/test_scraper.py): Comprehensive unit and integration test suite (82 tests).
+- [`tests/test_scraper.py`](tests/test_scraper.py): Comprehensive unit and integration test suite (129 tests).
 
 ## Project Structure & Outputs
 - `content/<author>/posts/<slug>.md`: Scraped markdown files with rich YAML frontmatter.

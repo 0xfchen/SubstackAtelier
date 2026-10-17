@@ -13,6 +13,7 @@ PLAYWRIGHT_CONTENT_RENDER_TIMEOUT_MS: int = 20000
 PLAYWRIGHT_HYDRATION_TIMEOUT_MS: int = 5000
 PLAYWRIGHT_SELECTOR_TIMEOUT_MS: int = 5000
 PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS: int = 30
+EXCLUDED_URL_KEYWORDS: tuple[str, ...] = ("about", "archive", "podcast")
 
 
 def get_credentials() -> tuple[str, str]:

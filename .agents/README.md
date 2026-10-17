@@ -52,6 +52,7 @@ Unified, chronological index of all retroactively created issues and plans mappe
 | **`stm-044`** | **Plan** | `feat` | Graph View Search Clear Button | [`plans/stm-044-graph-search-clear-button.md`](plans/stm-044-graph-search-clear-button.md) |
 | **`stm-045`** | **Plan** | `feat` | Migrate HTML-to-Markdown Engine to html-to-markdown | [`plans/stm-045-html-to-markdown-migration.md`](plans/stm-045-html-to-markdown-migration.md) |
 | **`stm-046`** | **Issue** | `refactor` | Refactor Python Scraper Deduplication and Configuration Consolidation | [`issues/stm-046-refactor-python-scraper.md`](issues/stm-046-refactor-python-scraper.md) |
+| **`stm-047`** | **Issue** | `refactor` | Decompose `base.py` into Discovery, Extract, Frontmatter, Storage, and Sync Modules | [`issues/stm-047-decompose-base-scraper.md`](issues/stm-047-decompose-base-scraper.md) |
 
 ---
 

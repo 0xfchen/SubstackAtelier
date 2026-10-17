@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html_to_markdown
+import mdformat
 from bs4 import BeautifulSoup
 from html_to_markdown import ConversionOptions
 
@@ -54,3 +55,17 @@ def convert_html_to_markdown(html_content: str | None, default_image_alt: bool =
         return converted_content
     except Exception:
         return None
+
+
+def normalize_markdown(markdown_text: str) -> str:
+    """Format markdown content using mdformat with GitHub Flavored Markdown extensions.
+
+    Args:
+        markdown_text: Unformatted markdown string.
+
+    Returns:
+        str: Cleanly formatted GFM markdown string.
+    """
+    if not markdown_text or not markdown_text.strip():
+        return ""
+    return mdformat.text(markdown_text.strip(), extensions={"gfm"}).strip()

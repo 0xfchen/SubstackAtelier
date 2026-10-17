@@ -28,7 +28,6 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         self,
         base_substack_url: str,
         content_save_dir: str = BASE_CONTENT_DIR,
-        html_save_dir: str | None = None,
         download_images: bool = False,
         browser: str = "chrome",
         headless: bool = False,
@@ -46,7 +45,6 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         Args:
             base_substack_url: Target Substack publication or post URL.
             content_save_dir: Root directory for author-centric exports (defaults to 'content').
-            html_save_dir: Deprecated / unused HTML export directory.
             download_images: Whether to download images locally.
             browser: Automation browser ('chrome' or 'edge').
             headless: Whether to execute browser headlessly.
@@ -117,7 +115,6 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         super().__init__(
             base_substack_url=base_substack_url,
             content_save_dir=content_save_dir,
-            html_save_dir=html_save_dir,
             download_images=download_images,
             overwrite=overwrite,
             clean_content=clean_content,

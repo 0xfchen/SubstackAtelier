@@ -36,8 +36,24 @@ def get_post_slug(url: str) -> str:
     Returns:
         str: The post slug, or 'unknown_post' if not detected.
     """
-    match = re.search(r"/p/([^/]+)", url)
+    clean_url = url.split("?")[0].split("#")[0]
+    match = re.search(r"/p/([^/]+)", clean_url)
     return match.group(1) if match else "unknown_post"
+
+
+def get_slug_from_url(url: str) -> str:
+    """Extract the post slug from a URL, falling back to the last path segment.
+
+    Args:
+        url: The full or partial URL of the post or page.
+
+    Returns:
+        str: Extracted slug or 'unknown' if empty.
+    """
+    clean_url = url.split("?")[0].split("#")[0]
+    if is_post_url(clean_url):
+        return get_post_slug(clean_url)
+    return clean_url.rstrip("/").split("/")[-1] or "unknown"
 
 
 def extract_main_part(url: str) -> str:

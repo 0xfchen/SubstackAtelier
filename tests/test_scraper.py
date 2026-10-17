@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 import scraper
+from scraper import discovery, extract, frontmatter, storage, sync
 
 
 class FakeScraper(scraper.BaseSubstackScraper):
@@ -45,7 +46,6 @@ def test_single_post_url_initializes_without_fetching_all_posts(tmp_path):
     scraper = FakeScraper(
         "https://example.substack.com/p/my-post",
         str(tmp_path / "md"),
-        str(tmp_path / "html"),
         download_images=True,
     )
 
@@ -228,7 +228,7 @@ def test_scraper_initialization(tmp_path):
 # 9. test_mdx_frontmatter_includes_source_url
 def test_mdx_frontmatter_includes_source_url():
     """Verify the post URL is emitted as canonical_url in YAML frontmatter."""
-    result = scraper.BaseSubstackScraper.combine_metadata_and_content(
+    result = frontmatter.combine_metadata_and_content(
         title="Title",
         subtitle="Subtitle",
         date="2024-01-01",
@@ -269,7 +269,7 @@ YOUTUBE_EMBED_HTML = (
 
 
 def test_youtube_embed_exported_as_linked_thumbnail():
-    md = scraper.BaseSubstackScraper.html_to_md(YOUTUBE_EMBED_HTML)
+    md = extract.post_html_to_markdown(YOUTUBE_EMBED_HTML)
 
     assert (
         "[![YouTube video](https://img.youtube.com/vi/9FDgRXPSv3U/hqdefault.jpg)]"
@@ -281,7 +281,7 @@ def test_youtube_embed_exported_as_linked_thumbnail():
 def test_youtube_embed_with_malformed_attrs_is_skipped():
     html = '<div class="youtube-wrap" data-attrs="not-json"><iframe src="x"></iframe></div><p>Body</p>'
 
-    md = scraper.BaseSubstackScraper.html_to_md(html)
+    md = extract.post_html_to_markdown(html)
 
     assert "Body" in md
 
@@ -511,69 +511,75 @@ def test_download_image_fails_after_max_retries(tmp_path):
         assert not dest.exists()
 
 
-def test_scrape_posts_skips_existing_when_overwrite_is_false(tmp_path):
+def test_scrape_posts_skips_existing_when_overwrite_is_false(tmp_path, monkeypatch):
     md_dir = tmp_path / "md"
-    html_dir = tmp_path / "html"
     scraper = FakeScraper(
         "https://example.substack.com/p/test-post",
-        str(md_dir),
-        str(html_dir),
+        content_save_dir=str(md_dir),
         overwrite=False,
     )
 
-    # Pre-create the markdown file
-    author_md_dir = md_dir / "example"
+    # Pre-create the markdown file in author posts directory
+    author_md_dir = md_dir / "example" / "posts"
     author_md_dir.mkdir(parents=True, exist_ok=True)
     existing_md = author_md_dir / "test-post.md"
     existing_md.write_text("existing content", encoding="utf-8")
 
-    scraper.extract_post_data = Mock()
-    scraper.save_to_file = Mock()
+    mock_extract = Mock()
+    mock_save = Mock()
+    monkeypatch.setattr("scraper.scrapers.base.extract_post_data", mock_extract)
+    monkeypatch.setattr("scraper.scrapers.base.save_to_file", mock_save)
 
     scraper.scrape_posts()
 
-    scraper.extract_post_data.assert_not_called()
-    scraper.save_to_file.assert_not_called()
+    mock_extract.assert_not_called()
+    mock_save.assert_not_called()
     assert existing_md.read_text(encoding="utf-8") == "existing content"
 
 
-def test_scrape_posts_rescrapes_existing_when_overwrite_is_true(tmp_path):
+def test_scrape_posts_rescrapes_existing_when_overwrite_is_true(tmp_path, monkeypatch):
     md_dir = tmp_path / "md"
-    html_dir = tmp_path / "html"
     scraper = FakeScraper(
         "https://example.substack.com/p/test-post",
-        str(md_dir),
-        str(html_dir),
+        content_save_dir=str(md_dir),
         overwrite=True,
     )
 
-    # Pre-create the markdown file
-    author_md_dir = md_dir / "example"
+    # Pre-create the markdown file in author posts directory
+    author_md_dir = md_dir / "example" / "posts"
     author_md_dir.mkdir(parents=True, exist_ok=True)
     existing_md = author_md_dir / "test-post.md"
     existing_md.write_text("old content", encoding="utf-8")
 
     mock_soup = Mock()
-    mock_soup.select_one = Mock(return_value=Mock())
     scraper.get_url_soup = Mock(return_value=mock_soup)
 
-    fake_tuple = (
-        "Updated Title",
-        "Updated Subtitle",
-        "Author",
-        "2026-09-13",
-        "",
-        "10",
-        "Updated Content",
-    )
-    scraper.extract_post_data = Mock(return_value=fake_tuple)
-    scraper.save_to_file = Mock()
+    fake_extracted = {
+        "title": "Updated Title",
+        "subtitle": "Updated Subtitle",
+        "author": "Author",
+        "date": "2026-09-13",
+        "cover_image": "",
+        "post_id": 10,
+        "tags": [],
+        "description": "",
+        "wordcount": 10,
+        "audience": "everyone",
+        "canonical_url": "",
+        "md_content": "Updated Content",
+        "title_found": True,
+        "body_found": True,
+    }
+    mock_extract = Mock(return_value=fake_extracted)
+    mock_save = Mock()
+    monkeypatch.setattr("scraper.scrapers.base.extract_post_data", mock_extract)
+    monkeypatch.setattr("scraper.scrapers.base.save_to_file", mock_save)
 
     scraper.scrape_posts()
 
-    scraper.extract_post_data.assert_called_once_with(mock_soup, "https://example.substack.com/p/test-post")
-    scraper.save_to_file.assert_called_once()
-    assert scraper.save_to_file.call_args[1]["overwrite"] is True
+    mock_extract.assert_called_once_with(mock_soup, "https://example.substack.com/p/test-post", clean_content=True)
+    mock_save.assert_called_once()
+    assert mock_save.call_args[1]["overwrite"] is True
 
 
 def test_cli_force_flag_sets_overwrite(monkeypatch):
@@ -603,26 +609,24 @@ def test_extract_post_id_from_preloads():
         'window._preloads = JSON.parse("{\\"post\\":{\\"id\\":214748970,\\"slug\\":\\"codex\\"}}");'
         "</script></head></html>"
     )
-    post_id = scraper.BaseSubstackScraper._extract_post_id(html)
+    post_id = extract._extract_post_id(html)
     assert post_id == 214748970
 
 
 def test_extract_post_id_returns_none_when_missing():
     html = "<html><head><title>No post ID</title></head></html>"
-    post_id = scraper.BaseSubstackScraper._extract_post_id(html)
+    post_id = extract._extract_post_id(html)
     assert post_id is None
 
 
 def test_combine_metadata_and_content_includes_post_id():
-    markdown_output = scraper.BaseSubstackScraper.combine_metadata_and_content(
+    markdown_output = frontmatter.combine_metadata_and_content(
         title="Codex Post",
         subtitle="Inside OpenAI",
         date="2026-09-09",
         author="Gergely",
         cover_image="",
-        like_count="100",
         content="Post body",
-        frontmatter_format="mdx",
         source_url="https://example.substack.com/p/codex",
         post_id=214748970,
     )
@@ -636,7 +640,7 @@ def test_extract_metadata_from_md_mdx_format(tmp_path):
         '---\ntitle: "Codex Post"\npost_id: 214748970\ndate: "2026-09-09"\nauthor: "Gergely"\n---\n\nBody',
         encoding="utf-8",
     )
-    metadata = scraper.BaseSubstackScraper._extract_metadata_from_md(str(md_file))
+    metadata = frontmatter.extract_metadata_from_md(str(md_file))
     assert metadata is not None
     assert metadata["title"] == "Codex Post"
     assert metadata["post_id"] == 214748970
@@ -655,7 +659,7 @@ def test_clean_post_html_strips_widgets_and_footers():
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
-    scraper.BaseSubstackScraper._clean_post_html(soup)
+    extract._clean_post_html(soup)
     cleaned_str = str(soup)
     assert "Real content" in cleaned_str
     assert "subscription-widget-wrap" not in cleaned_str
@@ -726,9 +730,9 @@ def test_convert_html_to_markdown_empty_input():
 
 
 def test_html_to_md_empty_content():
-    """Verify html_to_md safely returns empty string when content is empty or whitespace."""
-    assert scraper.BaseSubstackScraper.html_to_md("") == ""
-    assert scraper.BaseSubstackScraper.html_to_md("   ") == ""
+    """Verify post_html_to_markdown safely returns empty string when content is empty or whitespace."""
+    assert extract.post_html_to_markdown("") == ""
+    assert extract.post_html_to_markdown("   ") == ""
 
 
 def test_extract_preloaded_post_data():
@@ -737,7 +741,7 @@ def test_extract_preloaded_post_data():
         'window._preloads = JSON.parse("{\\"post\\":{\\"id\\":1234,\\"description\\":\\"A summary\\",\\"wordcount\\":500,\\"audience\\":\\"only_paid\\",\\"canonical_url\\":\\"https://example.com/p/test\\",\\"postTags\\":[{\\"name\\":\\"tech\\"},{\\"name\\":\\"ai\\"}]}}");'
         "</script></head></html>"
     )
-    data = scraper.BaseSubstackScraper._extract_preloaded_post_data(html)
+    data = extract._extract_preloaded_post_data(html)
     assert data["post_id"] == 1234
     assert data["description"] == "A summary"
     assert data["wordcount"] == 500
@@ -757,7 +761,7 @@ def test_save_posts_data_to_json_updates_existing_entry_by_post_id(tmp_path):
             "file_link": "posts/initial.md",
         }
     ]
-    scraper.save_posts_data_to_json(initial_entries)
+    storage.save_posts_data_to_json(scraper.metadata_file_path, initial_entries)
 
     updated_entries = [
         {
@@ -767,7 +771,7 @@ def test_save_posts_data_to_json_updates_existing_entry_by_post_id(tmp_path):
             "file_link": "posts/new-renamed-slug.md",
         }
     ]
-    scraper.save_posts_data_to_json(updated_entries)
+    storage.save_posts_data_to_json(scraper.metadata_file_path, updated_entries)
 
     import json
 
@@ -785,8 +789,8 @@ def test_save_posts_data_to_json_updates_existing_entry_by_post_id(tmp_path):
 def test_save_posts_data_to_json_appends_genuinely_new_posts(tmp_path):
     scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
 
-    scraper.save_posts_data_to_json([{"post_id": 101, "title": "First"}])
-    scraper.save_posts_data_to_json([{"post_id": 102, "title": "Second"}])
+    storage.save_posts_data_to_json(scraper.metadata_file_path, [{"post_id": 101, "title": "First"}])
+    storage.save_posts_data_to_json(scraper.metadata_file_path, [{"post_id": 102, "title": "Second"}])
 
     import json
 
@@ -796,11 +800,6 @@ def test_save_posts_data_to_json_appends_genuinely_new_posts(tmp_path):
     assert len(saved_data) == 2
     assert saved_data[0]["post_id"] == 101
     assert saved_data[1]["post_id"] == 102
-
-
-def test_save_essays_data_to_json_backward_compatibility_alias():
-    scraper = FakeScraper("https://example.substack.com")
-    assert scraper.save_essays_data_to_json == scraper.save_posts_data_to_json
 
 
 def test_scrape_posts_recovers_metadata_for_skipped_existing_files(tmp_path):
@@ -916,9 +915,7 @@ def test_clean_post_html_strips_comment_and_promo_buttons():
         <div class="post-footer">Footer promo content</div>
     </div>
     """
-    from scraper.scrapers.base import BaseSubstackScraper
-
-    md = BaseSubstackScraper.html_to_md(html, clean_content=True)
+    md = extract.post_html_to_markdown(html, clean_content=True)
     assert "This is the real article body paragraph." in md
     assert "Here is another legitimate paragraph mentioning to leave a comment if you like." in md
     assert "[Leave a comment]" not in md
@@ -941,7 +938,7 @@ def test_html_to_md_formats_cleanly_with_mdformat():
         </blockquote>
     </div>
     """
-    md = scraper.BaseSubstackScraper.html_to_md(html)
+    md = extract.post_html_to_markdown(html)
     assert "- First item" in md
     assert "- Second item" in md
     assert "* First item" not in md
@@ -951,7 +948,7 @@ def test_html_to_md_formats_cleanly_with_mdformat():
 
 def test_combine_metadata_and_content_trailing_newline():
     """Verify combine_metadata_and_content always terminates with a newline character."""
-    output = scraper.BaseSubstackScraper.combine_metadata_and_content(
+    output = frontmatter.combine_metadata_and_content(
         title="Sample Post",
         subtitle="",
         date="2026-09-26",
@@ -965,9 +962,8 @@ def test_combine_metadata_and_content_trailing_newline():
 
 def test_save_to_file_ensures_trailing_newline(tmp_path):
     """Verify save_to_file guarantees a trailing newline on written files."""
-    scraper = FakeScraper("https://example.substack.com", str(tmp_path))
     file_path = str(tmp_path / "test.md")
-    scraper.save_to_file(file_path, "no newline at end")
+    storage.save_to_file(file_path, "no newline at end")
     with open(file_path, encoding="utf-8") as f:
         saved_text = f.read()
     assert saved_text.endswith("\n")
@@ -1047,7 +1043,7 @@ def test_parse_args_sync_and_single_post_mutually_exclusive(monkeypatch):
 def test_sync_state_load_and_save(tmp_path):
     """Verify sync state persistence and loading."""
     scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
-    assert scraper._load_sync_state() is None
+    assert sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path) is None
 
     test_state = {
         "last_sync_at": "2026-09-27T10:00:00Z",
@@ -1056,9 +1052,9 @@ def test_sync_state_load_and_save(tmp_path):
         "last_post_slug": "test-slug",
         "total_synced_posts": 10,
     }
-    scraper._save_sync_state(test_state)
+    sync.save_sync_state(scraper.author_dir, test_state)
 
-    loaded = scraper._load_sync_state()
+    loaded = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
     assert loaded == test_state
 
 
@@ -1078,7 +1074,7 @@ def test_sync_state_bootstraps_from_metadata_json(tmp_path):
     metadata_file.write_text(json.dumps(metadata_data), encoding="utf-8")
 
     scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
-    bootstrapped = scraper._load_sync_state()
+    bootstrapped = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
 
     assert bootstrapped is not None
     assert bootstrapped["last_post_date"] == "2026-09-20"
@@ -1124,7 +1120,8 @@ def test_fetch_posts_from_api_pagination_and_cutoff(monkeypatch):
     fake_scraper = FakeScraper("https://example.substack.com")
 
     # Cutoff at post-2 (date 2026-09-20)
-    delta = fake_scraper._fetch_posts_from_api(
+    delta = sync.fetch_posts_from_api(
+        fake_scraper.base_substack_url,
         since_date="2026-09-20T12:00:00.000Z",
         limit=2,
     )
@@ -1146,7 +1143,7 @@ def test_fetch_posts_from_api_handles_api_failure(monkeypatch):
     monkeypatch.setattr(scraper.requests, "get", lambda url, timeout=30: FakeErrorResponse())
 
     fake_scraper = FakeScraper("https://example.substack.com")
-    result = fake_scraper._fetch_posts_from_api()
+    result = sync.fetch_posts_from_api(fake_scraper.base_substack_url)
     assert result is None
 
 
@@ -1157,7 +1154,7 @@ def test_sync_posts_raises_on_single_post():
         scraper.sync_posts()
 
 
-def test_sync_posts_up_to_date_when_no_delta(tmp_path):
+def test_sync_posts_up_to_date_when_no_delta(tmp_path, monkeypatch):
     """Verify sync_posts returns 0 and updates last_sync_at when already up to date."""
     scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
     initial_cursor = {
@@ -1167,20 +1164,20 @@ def test_sync_posts_up_to_date_when_no_delta(tmp_path):
         "last_post_slug": "latest-post",
         "total_synced_posts": 5,
     }
-    scraper._save_sync_state(initial_cursor)
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
 
-    scraper._fetch_posts_from_api = Mock(return_value=[])
+    monkeypatch.setattr("scraper.scrapers.base.fetch_posts_from_api", Mock(return_value=[]))
 
     synced_count = scraper.sync_posts()
     assert synced_count == 0
 
-    updated_cursor = scraper._load_sync_state()
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
     assert updated_cursor["total_synced_posts"] == 5
     assert updated_cursor["last_post_date"] == "2026-09-26T12:00:00.000Z"
     assert updated_cursor["last_sync_at"] != "2026-09-20T00:00:00Z"
 
 
-def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path):
+def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path, monkeypatch):
     """Verify sync_posts scrapes only newly published posts and advances cursor."""
     scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
     initial_cursor = {
@@ -1190,7 +1187,7 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path):
         "last_post_slug": "post-100",
         "total_synced_posts": 10,
     }
-    scraper._save_sync_state(initial_cursor)
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
 
     delta_api_posts = [
         {
@@ -1206,7 +1203,7 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path):
             "canonical_url": "https://example.substack.com/p/intermediate-post",
         },
     ]
-    scraper._fetch_posts_from_api = Mock(return_value=delta_api_posts)
+    monkeypatch.setattr("scraper.scrapers.base.fetch_posts_from_api", Mock(return_value=delta_api_posts))
 
     scraped_urls = []
 
@@ -1221,7 +1218,8 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path):
         }
 
     scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
-    scraper.save_posts_data_to_json = Mock()
+    save_posts_mock = Mock()
+    monkeypatch.setattr("scraper.scrapers.base.save_posts_data_to_json", save_posts_mock)
 
     synced_count = scraper.sync_posts()
     assert synced_count == 2
@@ -1230,8 +1228,8 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path):
         "https://example.substack.com/p/newest-post",
     ]
 
-    scraper.save_posts_data_to_json.assert_called_once()
-    updated_cursor = scraper._load_sync_state()
+    save_posts_mock.assert_called_once()
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
     assert updated_cursor["last_post_date"] == "2026-09-25T15:00:00.000Z"
     assert updated_cursor["last_post_id"] == 200
     assert updated_cursor["last_post_slug"] == "newest-post"
@@ -1242,15 +1240,13 @@ def test_is_cutoff_reached_predicate():
     """Verify _is_cutoff_reached predicate matches by post_id, slug, and timestamp comparisons."""
     from datetime import UTC, datetime
 
-    from scraper.scrapers.base import BaseSubstackScraper
-
     # Exact ID match
-    assert BaseSubstackScraper._is_cutoff_reached({"id": 123}, last_post_id=123) is True
-    assert BaseSubstackScraper._is_cutoff_reached({"id": 456}, last_post_id=123) is False
+    assert sync._is_cutoff_reached({"id": 123}, last_post_id=123) is True
+    assert sync._is_cutoff_reached({"id": 456}, last_post_id=123) is False
 
     # Exact slug match
-    assert BaseSubstackScraper._is_cutoff_reached({"slug": "target-slug"}, last_post_slug="target-slug") is True
-    assert BaseSubstackScraper._is_cutoff_reached({"slug": "other-slug"}, last_post_slug="target-slug") is False
+    assert sync._is_cutoff_reached({"slug": "target-slug"}, last_post_slug="target-slug") is True
+    assert sync._is_cutoff_reached({"slug": "other-slug"}, last_post_slug="target-slug") is False
 
     # Timestamp comparison
     post_item = {"post_date": "2026-09-20T12:00:00.000Z"}
@@ -1258,19 +1254,15 @@ def test_is_cutoff_reached_predicate():
     datetime_later = datetime(2026, 9, 21, 0, 0, tzinfo=UTC)
     datetime_earlier = datetime(2026, 9, 19, 0, 0, tzinfo=UTC)
 
-    assert BaseSubstackScraper._is_cutoff_reached(post_item, since_datetime=datetime_same) is True
-    assert BaseSubstackScraper._is_cutoff_reached(post_item, since_datetime=datetime_later) is True
-    assert BaseSubstackScraper._is_cutoff_reached(post_item, since_datetime=datetime_earlier) is False
+    assert sync._is_cutoff_reached(post_item, since_datetime=datetime_same) is True
+    assert sync._is_cutoff_reached(post_item, since_datetime=datetime_later) is True
+    assert sync._is_cutoff_reached(post_item, since_datetime=datetime_earlier) is False
 
     # Date-only format comparison
     datetime_day_same = datetime(2026, 9, 20, tzinfo=UTC)
     datetime_day_next = datetime(2026, 9, 21, tzinfo=UTC)
-    assert (
-        BaseSubstackScraper._is_cutoff_reached(post_item, since_datetime=datetime_day_same, is_date_only=True) is False
-    )
-    assert (
-        BaseSubstackScraper._is_cutoff_reached(post_item, since_datetime=datetime_day_next, is_date_only=True) is True
-    )
+    assert sync._is_cutoff_reached(post_item, since_datetime=datetime_day_same, is_date_only=True) is False
+    assert sync._is_cutoff_reached(post_item, since_datetime=datetime_day_next, is_date_only=True) is True
 
 
 # 22. CLI Validation & Incompatible Option Guards
@@ -1425,31 +1417,27 @@ def test_extract_post_body_element_and_html_fallbacks():
     """Verify _extract_post_body_element finds available-content, body.markup, or single-post."""
     from bs4 import BeautifulSoup
 
-    from scraper.scrapers.base import BaseSubstackScraper
-
     # 1. Available content
     soup_primary = BeautifulSoup('<div class="available-content"><p>Primary</p></div>', "html.parser")
-    element = BaseSubstackScraper._extract_post_body_element(soup_primary)
+    element = extract._extract_post_body_element(soup_primary)
     assert element is not None
     assert "Primary" in element.text
-    assert BaseSubstackScraper._extract_post_body_html(soup_primary).startswith('<div class="available-content">')
 
     # 2. Body markup fallback
     soup_fallback_1 = BeautifulSoup('<div class="body markup"><p>Fallback 1</p></div>', "html.parser")
-    element_fallback_1 = BaseSubstackScraper._extract_post_body_element(soup_fallback_1)
+    element_fallback_1 = extract._extract_post_body_element(soup_fallback_1)
     assert element_fallback_1 is not None
     assert "Fallback 1" in element_fallback_1.text
 
     # 3. Single post fallback
     soup_fallback_2 = BeautifulSoup('<article class="single-post"><p>Fallback 2</p></article>', "html.parser")
-    element_fallback_2 = BaseSubstackScraper._extract_post_body_element(soup_fallback_2)
+    element_fallback_2 = extract._extract_post_body_element(soup_fallback_2)
     assert element_fallback_2 is not None
     assert "Fallback 2" in element_fallback_2.text
 
     # 4. None present
     soup_empty = BeautifulSoup("<div><p>Empty</p></div>", "html.parser")
-    assert BaseSubstackScraper._extract_post_body_element(soup_empty) is None
-    assert BaseSubstackScraper._extract_post_body_html(soup_empty) == ""
+    assert extract._extract_post_body_element(soup_empty) is None
 
 
 def test_playwright_timeout_constants():
@@ -1467,3 +1455,122 @@ def test_playwright_timeout_constants():
     assert PLAYWRIGHT_HYDRATION_TIMEOUT_MS > 0
     assert PLAYWRIGHT_SELECTOR_TIMEOUT_MS > 0
     assert PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS > 0
+
+
+def test_discover_post_urls_uses_sitemap_and_filters_keywords(monkeypatch):
+    """Verify discover_post_urls parses sitemap XML and filters out excluded keywords."""
+    sitemap_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+        <url><loc>https://example.substack.com/p/first-post</loc></url>
+        <url><loc>https://example.substack.com/p/second-post</loc></url>
+        <url><loc>https://example.substack.com/about</loc></url>
+        <url><loc>https://example.substack.com/p/about-our-team</loc></url>
+        <url><loc>https://example.substack.com/archive</loc></url>
+    </urlset>
+    """
+
+    class FakeResponse:
+        ok = True
+        status_code = 200
+        content = sitemap_xml
+
+    monkeypatch.setattr(scraper.requests, "get", lambda url, timeout=30: FakeResponse())
+    urls = discovery.discover_post_urls("https://example.substack.com")
+    assert urls == [
+        "https://example.substack.com/p/first-post",
+        "https://example.substack.com/p/second-post",
+    ]
+
+
+def test_discover_post_urls_falls_back_to_feed_when_sitemap_fails(monkeypatch):
+    """Verify discover_post_urls falls back to RSS feed XML when sitemap request fails."""
+    feed_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+        <channel>
+            <item><link>https://example.substack.com/p/feed-post-1</link></item>
+            <item><link>https://example.substack.com/p/podcast-episode-1</link></item>
+            <item><link>https://example.substack.com/p/feed-post-2</link></item>
+        </channel>
+    </rss>
+    """
+
+    def fake_get(url, timeout=30):
+        class FakeResponse:
+            def __init__(self, ok, status_code, content):
+                self.ok = ok
+                self.status_code = status_code
+                self.content = content
+
+        if "sitemap.xml" in url:
+            return FakeResponse(False, 404, b"Not Found")
+        return FakeResponse(True, 200, feed_xml)
+
+    monkeypatch.setattr(scraper.requests, "get", fake_get)
+    urls = discovery.discover_post_urls("https://example.substack.com")
+    assert urls == [
+        "https://example.substack.com/p/feed-post-1",
+        "https://example.substack.com/p/feed-post-2",
+    ]
+
+
+def test_get_slug_from_url_handles_post_and_non_post_urls():
+    """Verify get_slug_from_url extracts slug from /p/ URLs and generic URLs."""
+    from scraper.url_utils import get_slug_from_url
+
+    assert get_slug_from_url("https://example.substack.com/p/my-cool-post") == "my-cool-post"
+    assert get_slug_from_url("https://example.substack.com/p/my-cool-post?r=123") == "my-cool-post"
+    assert get_slug_from_url("https://example.substack.com/custom-page/") == "custom-page"
+    assert get_slug_from_url("https://example.substack.com/custom-page") == "custom-page"
+
+
+def test_extract_post_data_reports_title_and_body_found_flags():
+    """Verify extract_post_data returns title_found and body_found boolean flags accurately."""
+    from bs4 import BeautifulSoup
+
+    # Valid post with title and body
+    html_valid = """
+    <html>
+        <head><title>Page Title</title></head>
+        <body>
+            <h1 class="post-title">Real Title</h1>
+            <div class="available-content"><p>Body text</p></div>
+        </body>
+    </html>
+    """
+    soup_valid = BeautifulSoup(html_valid, "html.parser")
+    result_valid = extract.extract_post_data(soup_valid, "https://example.substack.com/p/valid")
+    assert result_valid["title_found"] is True
+    assert result_valid["body_found"] is True
+    assert result_valid["title"] == "Real Title"
+    assert "Body text" in result_valid["md_content"]
+
+    # Post without body
+    html_no_body = """
+    <html>
+        <head><title>Page Title</title></head>
+        <body>
+            <h1 class="post-title">Title Only</h1>
+        </body>
+    </html>
+    """
+    soup_no_body = BeautifulSoup(html_no_body, "html.parser")
+    result_no_body = extract.extract_post_data(soup_no_body, "https://example.substack.com/p/no-body")
+    assert result_no_body["title_found"] is True
+    assert result_no_body["body_found"] is False
+
+
+def test_scrape_single_post_dumps_debug_html_on_extraction_failure(tmp_path):
+    """Verify _scrape_single_post dumps debug HTML when extraction fails."""
+    scraper_instance = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
+
+    from bs4 import BeautifulSoup
+
+    invalid_soup = BeautifulSoup("<html><body><div>No body</div></body></html>", "html.parser")
+    scraper_instance.get_url_soup = Mock(return_value=invalid_soup)
+
+    result = scraper_instance._scrape_single_post("https://example.substack.com/p/bad-post")
+    assert result is None
+
+    debug_file = tmp_path / "_debug" / "example" / "bad-post.html"
+    assert debug_file.exists()
+    assert "No body" in debug_file.read_text(encoding="utf-8")

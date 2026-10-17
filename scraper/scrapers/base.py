@@ -1,55 +1,49 @@
-import html
-import json
+"""Abstract base scraper defining Substack scraping orchestration."""
+
+from __future__ import annotations
+
 import logging
 import os
 import random
-import re
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 from time import sleep
-from typing import Any, Literal
-from xml.etree import ElementTree as ET
+from typing import Any
 
-import mdformat
-import requests
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from ..config import (
-    BASE_CONTENT_DIR,
-    DEFAULT_API_POST_LIMIT,
-    DEFAULT_REQUEST_TIMEOUT,
-    MAX_API_SYNC_PAGES,
-)
-from ..converter import convert_html_to_markdown
+from ..config import BASE_CONTENT_DIR
+from ..discovery import discover_post_urls
+from ..extract import extract_post_data
+from ..frontmatter import combine_metadata_and_content, extract_metadata_from_md
 from ..images import count_images_in_markdown, process_markdown_images
+from ..storage import build_file_link, get_filename_from_url, save_posts_data_to_json, save_to_file
+from ..sync import fetch_posts_from_api, load_sync_state, save_sync_state
 from ..url_utils import (
     extract_main_part,
     get_post_slug,
     get_publication_url,
+    get_slug_from_url,
     is_post_url,
 )
 
 logger = logging.getLogger(__name__)
 
-FrontmatterFormat = Literal["mdx", "legacy"]
-
 
 class BaseSubstackScraper(ABC):
-    """Abstract base scraper defining Substack post and metadata extraction pipeline.
+    """Abstract base scraper coordinating Substack post discovery, extraction, and archiving.
 
-    Handles URL discovery via sitemaps and RSS feeds, image tracking,
-    author-centric folder structures, content cleaning, and YAML frontmatter.
+    Delegates parsing, URL discovery, frontmatter, file operations, and sync logic
+    to focused modules while managing the high-level scraping lifecycle.
     """
 
     def __init__(
         self,
         base_substack_url: str,
         content_save_dir: str = BASE_CONTENT_DIR,
-        html_save_dir: str | None = None,
         download_images: bool = False,
-        frontmatter_format: FrontmatterFormat = "mdx",
         overwrite: bool = False,
         clean_content: bool = True,
     ) -> None:
@@ -58,13 +52,10 @@ class BaseSubstackScraper(ABC):
         Args:
             base_substack_url: Publication homepage or individual post URL.
             content_save_dir: Root directory for author-centric exports (defaults to 'content').
-            html_save_dir: Deprecated / unused HTML export directory.
             download_images: Whether to download CDN images locally.
-            frontmatter_format: Deprecated frontmatter format selector.
             overwrite: Whether to overwrite existing files on disk when scraping.
             clean_content: Whether to strip promotional widgets and subscription CTAs.
         """
-        self.frontmatter_format: FrontmatterFormat = frontmatter_format
         self.overwrite: bool = overwrite
         self.clean_content: bool = clean_content
         self.is_single_post: bool = is_post_url(base_substack_url)
@@ -85,12 +76,6 @@ class BaseSubstackScraper(ABC):
         self.images_save_dir: str = os.path.join(self.author_dir, "images")
         self.metadata_file_path: str = os.path.join(self.author_dir, "metadata.json")
 
-        # Aliases for backward compatibility
-        self.md_save_dir: str = self.posts_save_dir
-        self.base_md_dir: str = content_save_dir
-        self.base_html_dir: str = html_save_dir or os.path.join(content_save_dir, "_html")
-        self.html_save_dir: str = self.base_html_dir
-
         os.makedirs(self.posts_save_dir, exist_ok=True)
         logger.info("Created posts directory %s", self.posts_save_dir)
 
@@ -102,444 +87,7 @@ class BaseSubstackScraper(ABC):
         if self.is_single_post:
             self.post_urls: list[str] = [original_url]
         else:
-            self.keywords: list[str] = ["about", "archive", "podcast"]
-            self.post_urls: list[str] = self.get_all_post_urls()
-
-    def get_all_post_urls(self) -> list[str]:
-        """Fetch all post URLs via sitemap.xml with feed.xml fallback.
-
-        Returns:
-            list[str]: Filtered post URL list.
-        """
-        urls = self.fetch_urls_from_sitemap()
-        if not urls:
-            urls = self.fetch_urls_from_feed()
-        return self.filter_urls(urls, self.keywords)
-
-    def fetch_urls_from_sitemap(self) -> list[str]:
-        """Fetch post URLs declared in the publication sitemap.xml.
-
-        Returns:
-            list[str]: Discovered URLs, or empty list on error.
-        """
-        sitemap_url = f"{self.base_substack_url}sitemap.xml"
-        response = requests.get(sitemap_url, timeout=DEFAULT_REQUEST_TIMEOUT)
-
-        if not response.ok:
-            logger.warning("Error fetching sitemap at %s: %s", sitemap_url, response.status_code)
-            return []
-
-        root = ET.fromstring(response.content)
-        urls = [
-            element.text for element in root.iter("{http://www.sitemaps.org/schemas/sitemap/0.9}loc") if element.text
-        ]
-        return urls
-
-    def fetch_urls_from_feed(self) -> list[str]:
-        """Fetch recent post URLs from feed.xml RSS fallback.
-
-        Returns:
-            list[str]: URLs extracted from RSS items (typically up to 22 posts).
-        """
-        logger.info("Falling back to feed.xml. This will only contain up to the 22 most recent posts.")
-        feed_url = f"{self.base_substack_url}feed.xml"
-        response = requests.get(feed_url, timeout=DEFAULT_REQUEST_TIMEOUT)
-
-        if not response.ok:
-            logger.warning("Error fetching feed at %s: %s", feed_url, response.status_code)
-            return []
-
-        root = ET.fromstring(response.content)
-        urls = []
-        for item in root.findall(".//item"):
-            link = item.find("link")
-            if link is not None and link.text:
-                urls.append(link.text)
-
-        return urls
-
-    @staticmethod
-    def filter_urls(urls: list[str], keywords: list[str]) -> list[str]:
-        """Exclude non-post URLs containing specific reserved keywords.
-
-        Args:
-            urls: Candidate URLs to filter.
-            keywords: Blacklisted keywords (e.g. 'about', 'archive', 'podcast').
-
-        Returns:
-            list[str]: URLs that do not contain any of the blacklisted keywords.
-        """
-        return [url for url in urls if all(keyword not in url for keyword in keywords)]
-
-    @staticmethod
-    def convert_youtube_embeds(html_content: str) -> str:
-        """Replace Substack YouTube embed wrappers with linked thumbnail markdown/HTML.
-
-        Args:
-            html_content: Raw post HTML containing potential youtube-wrap divs.
-
-        Returns:
-            str: Modified HTML with clickable preview thumbnails replacing embed divs.
-        """
-        if "youtube-wrap" not in html_content:
-            return html_content
-        soup = BeautifulSoup(html_content, "html.parser")
-        for wrap in soup.find_all("div", class_="youtube-wrap"):
-            video_id = None
-            if wrap.has_attr("data-attrs"):
-                try:
-                    video_id = json.loads(wrap["data-attrs"]).get("videoId")
-                except (KeyError, TypeError, ValueError):
-                    pass
-            if not video_id:
-                iframe = wrap.find("iframe")
-                if iframe and "src" in iframe.attrs:
-                    match = re.search(r"embed/([a-zA-Z0-9_-]+)", iframe["src"])
-                    if match:
-                        video_id = match.group(1)
-            if not video_id:
-                continue
-
-            link = soup.new_tag("a", href=f"https://www.youtube.com/watch?v={video_id}")
-            img = soup.new_tag(
-                "img",
-                src=f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
-                alt="YouTube video",
-            )
-            link.append(img)
-            wrap.replace_with(link)
-
-        return str(soup)
-
-    @staticmethod
-    def _clean_post_html(soup: BeautifulSoup) -> None:
-        """Strip promotional widgets, subscription banners, reaction bars, and comment buttons."""
-        selectors_to_remove = [
-            "div.subscription-widget-wrap",
-            "div.post-footer",
-            "div.post-ufi",
-            "div.comments-section",
-            "div.caption-rec-wrap",
-            "button.like-button",
-            "div.like-button-container",
-        ]
-        for selector in selectors_to_remove:
-            for element in soup.select(selector):
-                element.decompose()
-
-        # Remove "Leave a comment" and interactive engagement prompt buttons
-        for element in soup.find_all(["a", "button"]):
-            text = element.get_text(strip=True).lower()
-            href = element.get("href", "").rstrip("/")
-            if text in ("leave a comment", "subscribe", "share", "share this post") or href.endswith(
-                ("/comments", "/subscribe", "/share")
-            ):
-                parent = element.parent
-                if (
-                    parent
-                    and parent.name in ("p", "div")
-                    and any(cls in parent.get("class", []) for cls in ("button-wrapper", "button-wrap"))
-                ):
-                    parent.decompose()
-                elif element.name == "button" or any(cls in element.get("class", []) for cls in ("button", "primary")):
-                    element.decompose()
-
-    @staticmethod
-    def html_to_md(html_content: str, clean_content: bool = True) -> str:
-        """Convert HTML content to Markdown with code language preservation and widget cleaning.
-
-        Args:
-            html_content: Raw post body HTML.
-            clean_content: Whether to strip promotional widgets and reaction bars.
-
-        Returns:
-            str: Cleaned markdown string with preserved code block languages.
-        """
-        html_content = BaseSubstackScraper.convert_youtube_embeds(html_content)
-        soup = BeautifulSoup(html_content, "html.parser")
-
-        if clean_content:
-            BaseSubstackScraper._clean_post_html(soup)
-
-        raw_markdown = convert_html_to_markdown(str(soup))
-        if not raw_markdown or not raw_markdown.strip():
-            return ""
-        return mdformat.text(raw_markdown.strip(), extensions={"gfm"}).strip()
-
-    def save_to_file(self, filepath: str, content: str, overwrite: bool = False) -> None:
-        """Write content string to specified file with overwrite guard.
-
-        Args:
-            filepath: Destination file path.
-            content: Text content to write.
-            overwrite: If False, skip writing when file already exists.
-
-        Raises:
-            ValueError: If filepath or content is not a string.
-        """
-        if not isinstance(filepath, str):
-            raise ValueError("filepath must be a string")
-        if not isinstance(content, str):
-            raise ValueError("content must be a string")
-        if os.path.exists(filepath) and not overwrite:
-            logger.info("File already exists: %s", filepath)
-            return
-
-        if not content.endswith("\n"):
-            content += "\n"
-
-        with open(filepath, "w", encoding="utf-8") as file:
-            file.write(content)
-
-    @staticmethod
-    def get_filename_from_url(url: str, filetype: str = ".md") -> str:
-        """Derive an output filename from a URL and extension.
-
-        Args:
-            url: Post or page URL.
-            filetype: Desired file extension (e.g. '.md').
-
-        Returns:
-            str: Filename with extension.
-
-        Raises:
-            ValueError: If url or filetype is not a string.
-        """
-        if not isinstance(url, str):
-            raise ValueError("url must be a string")
-        if not isinstance(filetype, str):
-            raise ValueError("filetype must be a string")
-        if not filetype.startswith("."):
-            filetype = f".{filetype}"
-        return url.split("/")[-1] + filetype
-
-    @staticmethod
-    def _extract_metadata_from_md(md_filepath: str) -> dict[str, Any] | None:
-        """Extract metadata dictionary from a local markdown file's frontmatter."""
-        if not os.path.exists(md_filepath):
-            return None
-        try:
-            with open(md_filepath, encoding="utf-8") as file:
-                content = file.read()
-        except OSError:
-            return None
-
-        metadata: dict[str, Any] = {}
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                frontmatter_lines = parts[1].strip().splitlines()
-                current_list_key = None
-                for line in frontmatter_lines:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    if stripped.startswith("- ") and current_list_key:
-                        item = stripped[2:].strip().strip('"').strip("'")
-                        metadata.setdefault(current_list_key, []).append(item)
-                        continue
-                    current_list_key = None
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        if not value:
-                            current_list_key = key
-                            metadata[key] = []
-                        elif key in ("post_id", "wordcount") and value.isdigit():
-                            metadata[key] = int(value)
-                        else:
-                            metadata[key] = value
-        return metadata or None
-
-    @staticmethod
-    def _extract_post_id(html_content: str) -> int | None:
-        """Extract Substack numeric post ID from HTML content."""
-        match = re.search(r'\\?"post\\?":\s*\{[^}]*\\?"id\\?":\s*(\d+)', html_content)
-        if match:
-            return int(match.group(1))
-        general_match = re.search(r'"postId":\s*(\d+)', html_content)
-        if general_match:
-            return int(general_match.group(1))
-        id_match = re.search(r'\\?"id\\?":\s*(\d+)', html_content)
-        if id_match:
-            return int(id_match.group(1))
-        return None
-
-    @staticmethod
-    def _extract_preloaded_post_data(html_content: str) -> dict[str, Any]:
-        """Extract rich post metadata from window._preloads embedded in Substack HTML.
-
-        Returns:
-            dict[str, Any]: Dictionary containing post_id, tags, description,
-                wordcount, audience, and canonical_url.
-        """
-        metadata: dict[str, Any] = {
-            "post_id": None,
-            "tags": [],
-            "description": "",
-            "wordcount": None,
-            "audience": "everyone",
-            "canonical_url": "",
-        }
-
-        # 1. Attempt to find window._preloads with JSON.parse("...")
-        json_match = re.search(r'JSON\.parse\("((?:[^"\\]|\\.)*)"\)', html_content)
-        if json_match:
-            try:
-                raw_inner = json_match.group(1)
-                # If raw_inner has escaped quotes (\"), unescape them
-                try:
-                    decoded_str = raw_inner.encode("utf-8").decode("unicode_escape")
-                    payload = json.loads(decoded_str)
-                except Exception:
-                    payload = json.loads(raw_inner.replace('\\"', '"'))
-                post = payload.get("post") if isinstance(payload, dict) else None
-                if isinstance(post, dict):
-                    if "id" in post:
-                        metadata["post_id"] = int(post["id"])
-                    if "postTags" in post and isinstance(post["postTags"], list):
-                        metadata["tags"] = [
-                            t.get("name") for t in post["postTags"] if isinstance(t, dict) and t.get("name")
-                        ]
-                    if "description" in post and post["description"]:
-                        metadata["description"] = post["description"].strip()
-                    if "wordcount" in post and post["wordcount"] is not None:
-                        metadata["wordcount"] = int(post["wordcount"])
-                    if "audience" in post and post["audience"]:
-                        metadata["audience"] = post["audience"]
-                    if "canonical_url" in post and post["canonical_url"]:
-                        metadata["canonical_url"] = post["canonical_url"]
-                    return metadata
-            except Exception as exc:
-                logger.debug("Failed parsing JSON.parse preloads: %s", exc)
-
-        # 2. Fallback regex extraction if full JSON.parse fails or is not present
-        if metadata["post_id"] is None:
-            metadata["post_id"] = BaseSubstackScraper._extract_post_id(html_content)
-
-        if not metadata["tags"]:
-            tags_match = re.search(r'\\?"postTags\\?":\s*(\[[^\]]*\])', html_content)
-            if tags_match:
-                try:
-                    clean_tags_str = tags_match.group(1).replace('\\"', '"')
-                    tags_list = json.loads(clean_tags_str)
-                    metadata["tags"] = [t.get("name") for t in tags_list if isinstance(t, dict) and t.get("name")]
-                except Exception:
-                    pass
-
-        if not metadata["description"]:
-            desc_match = re.search(
-                r'<meta\s+(?:name|property)="(?:\w+:)?description"\s+content="([^"]*)"',
-                html_content,
-                re.IGNORECASE,
-            )
-            if desc_match:
-                metadata["description"] = html.unescape(desc_match.group(1).strip())
-
-        if metadata["wordcount"] is None:
-            wc_match = re.search(r'\\?"wordcount\\?":\s*(\d+)', html_content)
-            if wc_match:
-                metadata["wordcount"] = int(wc_match.group(1))
-
-        if metadata["audience"] == "everyone":
-            aud_match = re.search(r'\\?"audience\\?":\s*\\?"([^\\",]+)\\?"', html_content)
-            if aud_match:
-                metadata["audience"] = aud_match.group(1)
-
-        if not metadata["canonical_url"]:
-            canon_match = re.search(r'<link\s+rel="canonical"\s+href="([^"]*)"', html_content, re.IGNORECASE)
-            if canon_match:
-                metadata["canonical_url"] = canon_match.group(1).strip()
-
-        return metadata
-
-    @staticmethod
-    def combine_metadata_and_content(
-        title: str,
-        subtitle: str,
-        date: str,
-        author: str,
-        cover_image: str,
-        content: str,
-        post_id: int | None = None,
-        tags: list[str] | None = None,
-        description: str = "",
-        wordcount: int | None = None,
-        audience: str = "everyone",
-        canonical_url: str = "",
-        like_count: str | None = None,
-        frontmatter_format: FrontmatterFormat = "mdx",
-        source_url: str = "",
-    ) -> str:
-        """Combine post metadata headers with markdown body using clean YAML frontmatter.
-
-        Args:
-            title: Post title.
-            subtitle: Post subtitle.
-            date: Publication date string (ISO or readable).
-            author: Author display name.
-            cover_image: Cover image URL.
-            content: Main article markdown body.
-            post_id: Optional Substack post ID for unique identification.
-            tags: Optional list of post tag strings.
-            description: Optional SEO description or article summary.
-            wordcount: Optional word count integer.
-            audience: Audience tier ('everyone' or 'only_paid').
-            canonical_url: Permanent link back to the live Substack essay.
-            like_count: Legacy like count (ignored in output).
-            frontmatter_format: Format selector (standardized to 'mdx').
-            source_url: Original post URL for MDX frontmatter.
-
-        Returns:
-            str: Combined markdown with YAML frontmatter.
-
-        Raises:
-            ValueError: If title or content is not a string.
-        """
-        if not isinstance(title, str):
-            raise ValueError("title must be a string")
-        if not isinstance(content, str):
-            raise ValueError("content must be a string")
-
-        safe_title = title.replace('"', '\\"')
-        safe_subtitle = subtitle.replace('"', '\\"') if subtitle else ""
-        safe_desc = description.replace('"', '\\"') if description else ""
-        safe_author = author.replace('"', '\\"') if author else ""
-        active_url = canonical_url or source_url
-
-        frontmatter = "---\n"
-        frontmatter += f'title: "{safe_title}"\n'
-        if safe_subtitle:
-            frontmatter += f'subtitle: "{safe_subtitle}"\n'
-        if safe_desc:
-            frontmatter += f'description: "{safe_desc}"\n'
-        if post_id is not None:
-            frontmatter += f"post_id: {post_id}\n"
-        if safe_author:
-            frontmatter += f'author: "{safe_author}"\n'
-        if date:
-            frontmatter += f'date: "{date}"\n'
-        if tags:
-            frontmatter += "tags:\n"
-            for t in tags:
-                clean_tag = t.replace('"', '\\"')
-                frontmatter += f'  - "{clean_tag}"\n'
-        if wordcount is not None:
-            frontmatter += f"wordcount: {wordcount}\n"
-        if audience:
-            frontmatter += f'audience: "{audience}"\n'
-        if active_url:
-            frontmatter += f'canonical_url: "{active_url}"\n'
-        if cover_image:
-            frontmatter += f'cover_image: "{cover_image}"\n'
-        frontmatter += "---\n\n"
-
-        body = content.strip()
-        if not body.startswith("# "):
-            body = f"# {title}\n\n{body}"
-
-        return frontmatter + body + "\n"
+            self.post_urls: list[str] = discover_post_urls(self.base_substack_url)
 
     @staticmethod
     def _is_rate_limited(soup: BeautifulSoup) -> bool:
@@ -579,310 +127,43 @@ class BaseSubstackScraper(ABC):
         sleep(delay)
         return True
 
-    @staticmethod
-    def _extract_post_body_element(soup: BeautifulSoup) -> Tag | None:
-        """Locate the main post body element using available selectors with fallbacks."""
-        return soup.select_one("div.available-content, div.body.markup, article.single-post")
-
-    @classmethod
-    def _extract_post_body_html(cls, soup: BeautifulSoup) -> str:
-        """Extract the post body HTML from parsed DOM using available selectors."""
-        element = cls._extract_post_body_element(soup)
-        return str(element) if element else ""
-
-    def extract_post_data(
-        self,
-        soup: BeautifulSoup,
-        url: str = "",
-    ) -> dict[str, Any]:
-        """Extract metadata and parse post body into markdown from BeautifulSoup.
-
-        Args:
-            soup: Parsed HTML DOM of the Substack post.
-            url: Source post URL.
-
-        Returns:
-            dict[str, Any]: Dictionary containing title, subtitle, author, date,
-                cover_image, post_id, tags, description, wordcount, audience,
-                canonical_url, and md_content.
-        """
-        title_element = soup.select_one("h1.post-title, h2")
-        title = title_element.text.strip() if title_element else "Untitled"
-        title_found = title_element is not None
-
-        subtitle_element = soup.select_one("h3.subtitle, div.subtitle-HEEcLo")
-        subtitle = subtitle_element.text.strip() if subtitle_element else ""
-
-        date = ""
-        author = ""
-        cover_image = ""
-        script_tag = soup.find("script", {"type": "application/ld+json"})
-        if script_tag and script_tag.string:
-            try:
-                ld_json = json.loads(script_tag.string)
-                if "datePublished" in ld_json:
-                    date_str = ld_json["datePublished"]
-                    date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                    date = date_obj.strftime("%Y-%m-%d")
-                if "author" in ld_json:
-                    authors = ld_json["author"]
-                    if isinstance(authors, list) and authors:
-                        author = authors[0].get("name", "")
-                    elif isinstance(authors, dict):
-                        author = authors.get("name", "")
-                if "image" in ld_json:
-                    images = ld_json["image"]
-                    if isinstance(images, list) and images:
-                        img = images[0]
-                        cover_image = img.get("url", "") if isinstance(img, dict) else str(img)
-                    elif isinstance(images, dict):
-                        cover_image = images.get("url", "")
-            except (json.JSONDecodeError, ValueError, KeyError):
-                pass
-
-        if not date:
-            date = "Date not found"
-
-        preloaded = self._extract_preloaded_post_data(str(soup))
-        post_id = preloaded.get("post_id")
-        tags = preloaded.get("tags", [])
-        description = preloaded.get("description", "") or subtitle
-        wordcount = preloaded.get("wordcount")
-        audience = preloaded.get("audience", "everyone")
-        canonical_url = preloaded.get("canonical_url", "") or url
-
-        content_element = self._extract_post_body_element(soup)
-        content_html = str(content_element) if content_element else ""
-        md = self.html_to_md(content_html, clean_content=self.clean_content)
-
-        if wordcount is None and md:
-            wordcount = len(md.split())
-
-        if not title_found or not content_element:
-            paywall = soup.select_one("h2.paywall-title")
-            ld_script = soup.find("script", {"type": "application/ld+json"})
-            logger.warning(
-                "[EXTRACT FAIL] url=%s title_found=%s title=%r content_element_found=%s paywall_present=%s ld_json_present=%s date=%r author=%r",
-                url,
-                title_found,
-                title,
-                content_element is not None,
-                paywall is not None,
-                ld_script is not None,
-                date,
-                author,
-            )
-            try:
-                debug_dir = os.path.join(self.base_content_dir, "_debug", self.writer_name)
-                os.makedirs(debug_dir, exist_ok=True)
-                slug = get_post_slug(url) if url and is_post_url(url) else (url.rstrip("/").split("/")[-1] or "unknown")
-                debug_path = os.path.join(debug_dir, f"{slug}.html")
-                with open(debug_path, "w", encoding="utf-8") as f:
-                    f.write(str(soup))
-                logger.debug("Dumped raw HTML -> %s", debug_path)
-            except OSError as dump_err:
-                logger.warning("Failed to dump debug HTML: %s", dump_err)
-
-        return {
-            "title": title,
-            "subtitle": subtitle,
-            "author": author,
-            "date": date,
-            "cover_image": cover_image,
-            "post_id": post_id,
-            "tags": tags,
-            "description": description,
-            "wordcount": wordcount,
-            "audience": audience,
-            "canonical_url": canonical_url,
-            "md_content": md,
-        }
-
-    def _get_sync_state_path(self) -> str:
-        """Return the absolute path to sync_state.json in author directory."""
-        return os.path.join(self.author_dir, "sync_state.json")
-
-    @staticmethod
-    def _parse_iso_datetime(date_string: str | None) -> datetime | None:
-        """Parse an ISO date/time string into a UTC-aware datetime object."""
-        if not date_string or date_string == "Date not found":
-            return None
+    def _dump_debug_html(self, soup: BeautifulSoup, url: str) -> None:
+        """Dump raw HTML to _debug directory upon extraction failure."""
         try:
-            clean_date_string = date_string.replace("Z", "+00:00")
-            parsed_datetime = datetime.fromisoformat(clean_date_string)
-            if parsed_datetime.tzinfo is None:
-                parsed_datetime = parsed_datetime.replace(tzinfo=UTC)
-            return parsed_datetime
-        except (ValueError, TypeError):
-            return None
-
-    @staticmethod
-    def _is_cutoff_reached(
-        post: dict[str, Any],
-        last_post_id: int | None = None,
-        last_post_slug: str | None = None,
-        since_datetime: datetime | None = None,
-        is_date_only: bool = False,
-    ) -> bool:
-        """Evaluate whether an API post record matches or precedes the sync cursor."""
-        post_id = post.get("id")
-        post_slug = post.get("slug")
-        if last_post_id is not None and post_id == last_post_id:
-            return True
-        if last_post_slug is not None and post_slug == last_post_slug:
-            return True
-        if since_datetime is None:
-            return False
-
-        post_datetime = BaseSubstackScraper._parse_iso_datetime(post.get("post_date"))
-        if post_datetime is None:
-            return False
-
-        if is_date_only:
-            return post_datetime.date() < since_datetime.date()
-        return post_datetime <= since_datetime
-
-    def _bootstrap_sync_state_from_metadata(self) -> dict[str, Any] | None:
-        """Bootstrap initial sync state from an existing metadata.json catalog."""
-        if not os.path.exists(self.metadata_file_path):
-            return None
-
-        try:
-            with open(self.metadata_file_path, encoding="utf-8") as file:
-                entries = json.load(file)
-        except (json.JSONDecodeError, OSError) as error:
-            logger.warning("Failed to bootstrap sync state from metadata.json: %s", error)
-            return None
-
-        if not isinstance(entries, list) or not entries:
-            return None
-
-        dated_entries = [
-            entry
-            for entry in entries
-            if isinstance(entry, dict) and entry.get("date") and entry.get("date") != "Date not found"
-        ]
-        if not dated_entries:
-            return None
-
-        dated_entries.sort(key=lambda entry: str(entry.get("date", "")), reverse=True)
-        newest_entry = dated_entries[0]
-        logger.info(
-            "Bootstrapping sync state from existing metadata.json (last post date: %s)",
-            newest_entry.get("date"),
-        )
-        return {
-            "last_sync_at": datetime.now(UTC).isoformat(),
-            "last_post_date": newest_entry.get("date"),
-            "last_post_id": newest_entry.get("post_id"),
-            "last_post_slug": newest_entry.get("slug"),
-            "total_synced_posts": len(entries),
-        }
-
-    def _load_sync_state(self) -> dict[str, Any] | None:
-        """Load sync state from disk or bootstrap from metadata.json if missing."""
-        sync_state_path = self._get_sync_state_path()
-        if os.path.exists(sync_state_path):
-            try:
-                with open(sync_state_path, encoding="utf-8") as file:
-                    data = json.load(file)
-                    if isinstance(data, dict):
-                        return data
-            except (json.JSONDecodeError, OSError) as error:
-                logger.warning("Failed to read %s: %s", sync_state_path, error)
-
-        return self._bootstrap_sync_state_from_metadata()
-
-    def _save_sync_state(self, state: dict[str, Any]) -> None:
-        """Save sync state dictionary to sync_state.json atomically."""
-        os.makedirs(self.author_dir, exist_ok=True)
-        sync_state_path = self._get_sync_state_path()
-        temporary_path = f"{sync_state_path}.tmp"
-        with open(temporary_path, "w", encoding="utf-8") as file:
-            json.dump(state, file, ensure_ascii=False, indent=4)
-        os.replace(temporary_path, sync_state_path)
-
-    def _fetch_posts_from_api(
-        self,
-        since_date: str | None = None,
-        last_post_id: int | None = None,
-        last_post_slug: str | None = None,
-        limit: int = DEFAULT_API_POST_LIMIT,
-        max_pages: int = MAX_API_SYNC_PAGES,
-    ) -> list[dict[str, Any]] | None:
-        """Fetch post metadata records from Substack API until cutoff is reached."""
-        delta_posts: list[dict[str, Any]] = []
-        since_datetime = self._parse_iso_datetime(since_date) if since_date else None
-        is_date_only = bool(since_date and len(since_date.strip()) == 10)
-
-        api_base_url = f"{self.base_substack_url}api/v1/posts"
-        offset = 0
-
-        for _ in range(max_pages):
-            api_page_url = f"{api_base_url}?offset={offset}&limit={limit}&sort=new"
-            try:
-                response = requests.get(api_page_url, timeout=DEFAULT_REQUEST_TIMEOUT)
-            except requests.RequestException as request_error:
-                logger.warning("Error requesting Substack API %s: %s", api_page_url, request_error)
-                return None if offset == 0 else delta_posts
-
-            if not response.ok:
-                logger.warning("Substack API returned status %s for %s", response.status_code, api_page_url)
-                return None if offset == 0 else delta_posts
-
-            try:
-                api_posts = response.json()
-            except (json.JSONDecodeError, ValueError) as json_error:
-                logger.warning("Failed to decode JSON from Substack API %s: %s", api_page_url, json_error)
-                return None if offset == 0 else delta_posts
-
-            if not isinstance(api_posts, list) or not api_posts:
-                break
-
-            stopped = False
-            for post in api_posts:
-                if not isinstance(post, dict):
-                    continue
-
-                if self._is_cutoff_reached(
-                    post=post,
-                    last_post_id=last_post_id,
-                    last_post_slug=last_post_slug,
-                    since_datetime=since_datetime,
-                    is_date_only=is_date_only,
-                ):
-                    stopped = True
-                    break
-
-                delta_posts.append(post)
-
-            if stopped or len(api_posts) < limit:
-                break
-
-            offset += limit
-
-        return delta_posts
+            debug_dir = os.path.join(self.base_content_dir, "_debug", self.writer_name)
+            os.makedirs(debug_dir, exist_ok=True)
+            slug = get_slug_from_url(url)
+            debug_path = os.path.join(debug_dir, f"{slug}.html")
+            with open(debug_path, "w", encoding="utf-8") as file:
+                file.write(str(soup))
+            logger.debug("Dumped raw HTML -> %s", debug_path)
+        except OSError as dump_err:
+            logger.warning("Failed to dump debug HTML: %s", dump_err)
 
     def _scrape_single_post(
         self,
         url: str,
         progress_bar: tqdm | None = None,
     ) -> dict[str, Any] | None:
-        """Scrape a single post URL and return its metadata entry dictionary."""
-        markdown_filename = self.get_filename_from_url(url, filetype=".md")
-        markdown_filepath = os.path.join(self.posts_save_dir, markdown_filename)
-        slug = get_post_slug(url) if is_post_url(url) else url.rstrip("/").split("/")[-1]
+        """Scrape an individual post, converting content to markdown and saving to disk.
+
+        Args:
+            url: Full URL of the Substack post.
+            progress_bar: Optional tqdm progress bar instance.
+
+        Returns:
+            dict[str, Any] | None: Post metadata dictionary on success, or None on failure/skip.
+        """
+        slug = get_slug_from_url(url)
+        filename = get_filename_from_url(url, filetype=".md")
+        markdown_filepath = os.path.join(self.posts_save_dir, filename)
 
         if not self.overwrite and os.path.exists(markdown_filepath):
-            if progress_bar:
-                progress_bar.write(f"File already exists: {markdown_filepath}")
-            else:
-                logger.info("File already exists: %s", markdown_filepath)
             existing_entry: dict[str, Any] = {
-                "file_link": os.path.relpath(markdown_filepath, self.author_dir).replace("\\", "/"),
+                "file_link": build_file_link(markdown_filepath, self.author_dir),
                 "slug": slug,
             }
-            extracted_metadata = self._extract_metadata_from_md(markdown_filepath)
+            extracted_metadata = extract_metadata_from_md(markdown_filepath)
             if extracted_metadata:
                 existing_entry.update(extracted_metadata)
             return existing_entry
@@ -891,36 +172,26 @@ class BaseSubstackScraper(ABC):
         if soup is None:
             return None
 
-        extracted = self.extract_post_data(soup, url)
-        if isinstance(extracted, tuple):
-            title, subtitle, author, date, cover_image = extracted[0:5]
-            raw_body = extracted[6] if len(extracted) > 6 else extracted[5]
-            preloaded = self._extract_preloaded_post_data(str(soup))
-            post_id = preloaded.get("post_id")
-            tags = preloaded.get("tags", [])
-            description = preloaded.get("description") or subtitle
-            wordcount = preloaded.get("wordcount") or (len(raw_body.split()) if raw_body else 0)
-            audience = preloaded.get("audience", "everyone")
-            canonical_url = preloaded.get("canonical_url", url)
-        else:
-            title = extracted["title"]
-            subtitle = extracted["subtitle"]
-            author = extracted["author"]
-            date = extracted["date"]
-            cover_image = extracted["cover_image"]
-            raw_body = extracted["md_content"]
-            post_id = extracted.get("post_id")
-            tags = extracted.get("tags", [])
-            description = extracted.get("description", "") or subtitle
-            wordcount = extracted.get("wordcount") or (len(raw_body.split()) if raw_body else 0)
-            audience = extracted.get("audience", "everyone")
-            canonical_url = extracted.get("canonical_url", url)
+        extracted = extract_post_data(soup, url, clean_content=self.clean_content)
 
-        content_element = self._extract_post_body_element(soup)
-        if title == "Untitled" or content_element is None:
+        if not extracted["title_found"] or not extracted["body_found"]:
+            paywall = soup.select_one("h2.paywall-title")
+            ld_script = soup.find("script", {"type": "application/ld+json"})
+            logger.warning(
+                "[EXTRACT FAIL] url=%s title_found=%s title=%r content_element_found=%s paywall_present=%s ld_json_present=%s date=%r author=%r",
+                url,
+                extracted["title_found"],
+                extracted["title"],
+                extracted["body_found"],
+                paywall is not None,
+                ld_script is not None,
+                extracted["date"],
+                extracted["author"],
+            )
+            self._dump_debug_html(soup, url)
             skip_message = (
                 f"[SKIP] Extraction failed for {url} "
-                f"(title={title!r}, content_present={content_element is not None}). See _debug dump."
+                f"(title={extracted['title']!r}, content_present={extracted['body_found']}). See _debug dump."
             )
             if progress_bar:
                 progress_bar.write(skip_message)
@@ -928,105 +199,55 @@ class BaseSubstackScraper(ABC):
                 logger.warning(skip_message)
             return None
 
+        raw_body = extracted["md_content"]
         if self.download_images:
             total_images = count_images_in_markdown(raw_body)
             with tqdm(
                 total=total_images,
                 desc=f"Downloading images for {slug}",
                 leave=False,
+                disable=progress_bar is not None,
             ) as image_progress_bar:
                 raw_body = process_markdown_images(
-                    raw_body,
-                    self.writer_name,
-                    slug,
-                    image_progress_bar,
+                    md_content=raw_body,
+                    author=self.writer_name,
+                    post_slug=slug,
+                    pbar=image_progress_bar if progress_bar is None else progress_bar,
                     base_content_dir=self.base_content_dir,
                 )
 
-        final_markdown = self.combine_metadata_and_content(
-            title=title,
-            subtitle=subtitle,
-            date=date,
-            author=author,
-            cover_image=cover_image,
+        final_markdown = combine_metadata_and_content(
+            title=extracted["title"],
+            subtitle=extracted["subtitle"],
+            date=extracted["date"],
+            author=extracted["author"],
+            cover_image=extracted["cover_image"],
             content=raw_body,
-            post_id=post_id,
-            tags=tags,
-            description=description,
-            wordcount=wordcount,
-            audience=audience,
-            canonical_url=canonical_url,
+            post_id=extracted["post_id"],
+            tags=extracted["tags"],
+            description=extracted["description"],
+            wordcount=extracted["wordcount"],
+            audience=extracted["audience"],
+            canonical_url=extracted["canonical_url"],
         )
 
-        self.save_to_file(markdown_filepath, final_markdown, overwrite=self.overwrite)
+        save_to_file(markdown_filepath, final_markdown, overwrite=self.overwrite)
 
         return {
-            "title": title,
-            "subtitle": subtitle,
-            "description": description,
-            "author": author,
-            "date": date,
-            "cover_image": cover_image,
-            "post_id": post_id,
-            "tags": tags,
-            "wordcount": wordcount,
-            "audience": audience,
-            "canonical_url": canonical_url,
-            "file_link": os.path.relpath(markdown_filepath, self.author_dir).replace("\\", "/"),
+            "title": extracted["title"],
+            "subtitle": extracted["subtitle"],
+            "description": extracted["description"],
+            "author": extracted["author"],
+            "date": extracted["date"],
+            "cover_image": extracted["cover_image"],
+            "post_id": extracted["post_id"],
+            "tags": extracted["tags"],
+            "wordcount": extracted["wordcount"],
+            "audience": extracted["audience"],
+            "canonical_url": extracted["canonical_url"],
+            "file_link": build_file_link(markdown_filepath, self.author_dir),
             "slug": slug,
         }
-
-    def save_posts_data_to_json(self, posts_data: list[dict]) -> None:
-        """Save posts metadata records to metadata.json in the author's directory.
-
-        Merges records in place by unique post_id first (if available), then by slug
-        or file_link. Preserves original order and updates modified fields.
-
-        Args:
-            posts_data: List of post metadata dictionaries to serialize.
-        """
-        os.makedirs(self.author_dir, exist_ok=True)
-        json_path = self.metadata_file_path
-        existing_data: list[dict] = []
-        if os.path.exists(json_path):
-            with open(json_path, encoding="utf-8") as file:
-                try:
-                    existing_data = json.load(file)
-                except (json.JSONDecodeError, ValueError):
-                    existing_data = []
-
-        def _get_entry_key(entry: dict) -> str:
-            if entry.get("post_id"):
-                return f"id:{entry['post_id']}"
-            if entry.get("slug"):
-                return f"slug:{entry['slug']}"
-            file_link = entry.get("file_link", "")
-            if file_link:
-                base_name = os.path.splitext(os.path.basename(file_link))[0]
-                return f"file:{base_name}"
-            return f"title:{entry.get('title', '')}"
-
-        merged_data: list[dict] = []
-        key_to_index: dict[str, int] = {}
-
-        for item in existing_data:
-            key = _get_entry_key(item)
-            key_to_index[key] = len(merged_data)
-            merged_data.append(dict(item))
-
-        for item in posts_data:
-            key = _get_entry_key(item)
-            if key in key_to_index:
-                index = key_to_index[key]
-                merged_data[index].update(item)
-            else:
-                key_to_index[key] = len(merged_data)
-                merged_data.append(dict(item))
-
-        with open(json_path, "w", encoding="utf-8") as file:
-            json.dump(merged_data, file, ensure_ascii=False, indent=4)
-
-    save_essays_data_to_json = save_posts_data_to_json
 
     def scrape_posts(self, limit: int = 0) -> None:
         """Iterate over all post URLs, scraping and saving them to disk.
@@ -1053,9 +274,12 @@ class BaseSubstackScraper(ABC):
 
                 count += 1
                 progress_bar.update(1)
-                if limit != 0 and count == limit:
+
+                if limit != 0 and count >= limit:
                     break
-        self.save_posts_data_to_json(posts_data=posts_data)
+
+        save_posts_data_to_json(self.metadata_file_path, posts_data)
+        logger.info("Saved %d posts to %s", len(posts_data), self.metadata_file_path)
 
     def sync_posts(self) -> int:
         """Execute incremental delta synchronization for the publication.
@@ -1072,13 +296,13 @@ class BaseSubstackScraper(ABC):
         if self.is_single_post:
             raise ValueError("sync_posts() cannot be called on a single post URL.")
 
-        cursor = self._load_sync_state()
+        cursor = load_sync_state(self.author_dir, self.metadata_file_path)
         if cursor is None:
             logger.info("No prior sync state found. Running full scrape to initialize archive.")
             self.scrape_posts(limit=0)
-            new_cursor = self._load_sync_state()
+            new_cursor = load_sync_state(self.author_dir, self.metadata_file_path)
             if new_cursor:
-                self._save_sync_state(new_cursor)
+                save_sync_state(self.author_dir, new_cursor)
             return len(self.post_urls)
 
         since_date = cursor.get("last_post_date")
@@ -1086,7 +310,8 @@ class BaseSubstackScraper(ABC):
         last_post_slug = cursor.get("last_post_slug")
 
         logger.info("Checking for new posts since %s...", since_date)
-        delta_posts = self._fetch_posts_from_api(
+        delta_posts = fetch_posts_from_api(
+            publication_url=self.base_substack_url,
             since_date=since_date,
             last_post_id=last_post_id,
             last_post_slug=last_post_slug,
@@ -1095,15 +320,15 @@ class BaseSubstackScraper(ABC):
         if delta_posts is None:
             logger.warning("Substack API unavailable. Falling back to sitemap discovery.")
             self.scrape_posts(limit=0)
-            new_cursor = self._load_sync_state()
+            new_cursor = load_sync_state(self.author_dir, self.metadata_file_path)
             if new_cursor:
-                self._save_sync_state(new_cursor)
+                save_sync_state(self.author_dir, new_cursor)
             return len(self.post_urls)
 
         if not delta_posts:
             logger.info("Sync up to date: 0 new posts found.")
             cursor["last_sync_at"] = datetime.now(UTC).isoformat()
-            self._save_sync_state(cursor)
+            save_sync_state(self.author_dir, cursor)
             return 0
 
         logger.info("Found %d new post(s) to sync.", len(delta_posts))
@@ -1125,7 +350,7 @@ class BaseSubstackScraper(ABC):
                 progress_bar.update(1)
 
         if new_entries:
-            self.save_posts_data_to_json(posts_data=new_entries)
+            save_posts_data_to_json(self.metadata_file_path, posts_data=new_entries)
             newest_post = delta_posts[0]
             cursor["last_sync_at"] = datetime.now(UTC).isoformat()
             cursor["last_post_date"] = newest_post.get("post_date") or cursor.get("last_post_date")
@@ -1134,7 +359,7 @@ class BaseSubstackScraper(ABC):
             if newest_post.get("slug"):
                 cursor["last_post_slug"] = newest_post["slug"]
             cursor["total_synced_posts"] = cursor.get("total_synced_posts", 0) + len(new_entries)
-            self._save_sync_state(cursor)
+            save_sync_state(self.author_dir, cursor)
 
         logger.info("Sync completed: %d post(s) synced successfully.", len(new_entries))
         return len(new_entries)
