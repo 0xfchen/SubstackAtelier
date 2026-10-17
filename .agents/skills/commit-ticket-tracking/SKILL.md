@@ -81,7 +81,7 @@ Group changes by module using relative repository paths:
 ### Automated Tests
 - Specific `pytest` commands and test cases covering the feature:
   ```bash
-  uv run pytest tests/test_substack_scraper.py -k "<filter>"
+  uv run pytest tests/test_substack.py -k "<filter>"
   ```
 
 ### Manual Verification

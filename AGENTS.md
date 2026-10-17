@@ -114,7 +114,7 @@ flowchart LR
 - [`scraper/substack.py`](scraper/substack.py): Concrete `SubstackScraper` class receiving an injected `PageFetcher` and coordinating post scraping and sync loops.
 - [`scraper/cli.py`](scraper/cli.py): CLI argument parser, `_build_page_fetcher`, and execution coordinator managing deterministic cleanup via `contextlib.ExitStack`.
 - [`reader/`](reader/): Static Astro reader based on Astro Tone, ingesting `../content/**/posts/*.{md,mdx}` with full-text search (Pagefind), tag filtering, syntax highlighting, and dark mode.
-- [`tests/test_scraper.py`](tests/test_scraper.py): Comprehensive unit and integration test suite (138 tests).
+- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (138 tests across per-module files).
 
 ## Project Structure & Outputs
 - `content/<author>/posts/<slug>.md`: Scraped markdown files with rich YAML frontmatter.
@@ -200,7 +200,7 @@ flowchart LR
 3. **Security & Credentials**: Never hardcode or commit credentials. Maintain `.env` and `config.py` in `.gitignore`.
 4. **Code Quality & Typing**: Follow PEP 8 guidelines, PEP 585 built-in generics (`list`, `dict`, `tuple`), and PEP 604 union types (`T | None`).
 5. **Docstrings & Scope Visibility**: Any function or method whose caller is only within the same module or class must by default be protected with a `_` prefix (e.g. `_extract_post_id`, `_extract_metadata_from_md`). Only expose functions/methods as public (no `_` prefix) if they are intended to be called from another module. Use Google-style docstrings for public classes and functions, and concise one-line docstrings for protected (`_` prefixed) methods. Maintain callee-above-caller ordering.
-6. **Documentation Integrity**: Use relative repository file paths in documentation (never absolute paths). Keep tests in `tests/test_scraper.py` synchronized with all features and bugfixes.
+6. **Documentation Integrity**: Use relative repository file paths in documentation (never absolute paths). Keep tests in `tests/` synchronized with all features and bugfixes.
 7. **Test Mocking Conventions**: Use `Fake` as the naming prefix for test mock or stub classes rather than `Dummy` (e.g. `FakeScraper`).
 8. **Linting and Formatting**: Always run `uv run ruff check .` and `uv run ruff format .` (or verify with `--check`) after making Python code changes to ensure linting and formatting compliance before proceeding.
 9. **Commit Message Format**: Follow the standard Conventional Commit prefixes without component scopes (`type: description` instead of `type(scope): description`):
