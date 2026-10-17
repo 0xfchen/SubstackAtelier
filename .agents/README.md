@@ -53,6 +53,7 @@ Unified, chronological index of all retroactively created issues and plans mappe
 | **`stm-045`** | **Plan** | `feat` | Migrate HTML-to-Markdown Engine to html-to-markdown | [`plans/stm-045-html-to-markdown-migration.md`](plans/stm-045-html-to-markdown-migration.md) |
 | **`stm-046`** | **Issue** | `refactor` | Refactor Python Scraper Deduplication and Configuration Consolidation | [`issues/stm-046-refactor-python-scraper.md`](issues/stm-046-refactor-python-scraper.md) |
 | **`stm-047`** | **Issue** | `refactor` | Decompose `base.py` into Discovery, Extract, Frontmatter, Storage, and Sync Modules | [`issues/stm-047-decompose-base-scraper.md`](issues/stm-047-decompose-base-scraper.md) |
+| **`stm-048`** | **Issue** | `refactor` | Replace Free/Premium Scraper Inheritance with Injectable Page Fetchers | [`issues/stm-048-injectable-page-fetchers.md`](issues/stm-048-injectable-page-fetchers.md) |
 
 ---
 

@@ -7,7 +7,7 @@ from xml.etree import ElementTree as ET
 
 import requests
 
-from .config import DEFAULT_REQUEST_TIMEOUT, EXCLUDED_URL_KEYWORDS
+from scraper.config import DEFAULT_REQUEST_TIMEOUT, EXCLUDED_URL_KEYWORDS
 
 logger = logging.getLogger(__name__)
 

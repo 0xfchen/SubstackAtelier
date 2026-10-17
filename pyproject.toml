@@ -40,7 +40,7 @@ dev = [
 scraper = "scraper:main"
 
 [tool.setuptools]
-packages = ["scraper", "scraper.scrapers"]
+packages = ["scraper", "scraper.fetchers"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

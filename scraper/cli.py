@@ -1,11 +1,12 @@
 import argparse
+import contextlib
 import logging
 import sys
 
-from .config import BASE_CONTENT_DIR
-from .scrapers.free import SubstackScraper
-from .scrapers.premium import PremiumSubstackScraper
-from .url_utils import is_post_url
+from scraper.config import BASE_CONTENT_DIR
+from scraper.fetchers import PageFetcher, PlaywrightFetcher, RequestsFetcher
+from scraper.substack import SubstackScraper
+from scraper.url_utils import is_post_url
 
 logger = logging.getLogger("scraper")
 
@@ -237,6 +238,23 @@ Examples:
     return args
 
 
+def _build_page_fetcher(args: argparse.Namespace) -> PageFetcher:
+    """Construct the appropriate page fetcher based on CLI options."""
+    if args.premium:
+        return PlaywrightFetcher(
+            browser=args.browser or "chrome",
+            headless=args.headless,
+            browser_path=args.browser_path,
+            user_agent=args.user_agent,
+            use_persistent_profile=args.persistent_profile,
+            skip_login=args.skip_login,
+            storage_state=args.storage_state or "",
+            cdp_url=args.cdp_url or "",
+            start_url=args.url,
+        )
+    return RequestsFetcher()
+
+
 def main() -> None:
     """Execute the command line interface to scrape posts and build catalogs."""
     args = parse_args()
@@ -262,31 +280,18 @@ def main() -> None:
     if args.directory is None:
         args.directory = base_content_dir
 
-    if args.premium:
-        scraper = PremiumSubstackScraper(
+    page_fetcher = _build_page_fetcher(args)
+    with contextlib.ExitStack() as exit_stack:
+        exit_stack.callback(page_fetcher.close)
+        substack_scraper = SubstackScraper(
             base_substack_url=args.url,
-            content_save_dir=args.directory,
-            download_images=args.images,
-            browser=args.browser or "chrome",
-            headless=args.headless,
-            browser_path=args.browser_path,
-            user_agent=args.user_agent,
-            use_persistent_profile=args.persistent_profile,
-            skip_login=args.skip_login,
-            storage_state=args.storage_state,
-            cdp_url=args.cdp_url,
-            overwrite=args.overwrite,
-            clean_content=args.clean_content,
-        )
-    else:
-        scraper = SubstackScraper(
-            args.url,
+            fetcher=page_fetcher,
             content_save_dir=args.directory,
             download_images=args.images,
             overwrite=args.overwrite,
             clean_content=args.clean_content,
         )
-    if args.sync:
-        scraper.sync_posts()
-    else:
-        scraper.scrape_posts(args.number)
+        if args.sync:
+            substack_scraper.sync_posts()
+        else:
+            substack_scraper.scrape_posts(args.number)

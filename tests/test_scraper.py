@@ -1,16 +1,49 @@
 import os
 import sys
+from typing import Any
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 import scraper
 from scraper import discovery, extract, frontmatter, storage, sync
+from scraper.fetchers import PageFetcher, PlaywrightFetcher, RequestsFetcher, rate_limit
 
 
-class FakeScraper(scraper.BaseSubstackScraper):
-    def get_url_soup(self, url: str):
-        return None
+class FakeFetcher:
+    """Fake PageFetcher for testing SubstackScraper without network or browser."""
+
+    def __init__(self, canned_soup: Any = None) -> None:
+        self.canned_soup = canned_soup
+        self.closed: bool = False
+
+    def fetch_soup(self, url: str, max_attempts: int = 5) -> Any:
+        return self.canned_soup
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeScraper(scraper.SubstackScraper):
+    """Test scraper stub injecting FakeFetcher by default."""
+
+    def __init__(
+        self,
+        base_substack_url: str,
+        content_save_dir: str = "content",
+        download_images: bool = False,
+        overwrite: bool = False,
+        clean_content: bool = True,
+        fetcher: PageFetcher | None = None,
+    ) -> None:
+        super().__init__(
+            base_substack_url=base_substack_url,
+            fetcher=fetcher if fetcher is not None else FakeFetcher(),
+            content_save_dir=content_save_dir,
+            download_images=download_images,
+            overwrite=overwrite,
+            clean_content=clean_content,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -441,16 +474,15 @@ def test_browser_manager_launch_cdp():
 
 def test_premium_scraper_requires_credentials_when_not_skipping():
     with (
-        patch("scraper.scrapers.premium.get_credentials", return_value=("", "")),
+        patch("scraper.fetchers.playwright.get_credentials", return_value=("", "")),
         patch(
-            "scraper.scrapers.premium.BrowserManager.DEFAULT_STORAGE_STATE_PATH",
+            "scraper.fetchers.playwright.BrowserManager.DEFAULT_STORAGE_STATE_PATH",
             "/nonexistent/path/storage.json",
         ),
     ):
         with pytest.raises(ValueError, match="Premium scraping requires credentials"):
-            scraper.PremiumSubstackScraper(
-                base_substack_url="https://example.substack.com",
-                content_save_dir="content",
+            PlaywrightFetcher(
+                start_url="https://example.substack.com",
                 skip_login=False,
             )
 
@@ -462,13 +494,12 @@ def test_premium_scraper_init_with_skip_login():
     mock_context.pages = [mock_page]
     mock_session.context = mock_context
 
-    with patch("scraper.scrapers.premium.BrowserManager.launch", return_value=mock_session):
-        premium_scraper = scraper.PremiumSubstackScraper(
-            base_substack_url="https://example.substack.com",
-            content_save_dir="content",
+    with patch("scraper.fetchers.playwright.BrowserManager.launch", return_value=mock_session):
+        fetcher = PlaywrightFetcher(
+            start_url="https://example.substack.com",
             skip_login=True,
         )
-        assert premium_scraper.skip_login is True
+        assert fetcher.skip_login is True
         mock_page.goto.assert_called_once_with("https://example.substack.com", wait_until="domcontentloaded")
 
 
@@ -527,8 +558,8 @@ def test_scrape_posts_skips_existing_when_overwrite_is_false(tmp_path, monkeypat
 
     mock_extract = Mock()
     mock_save = Mock()
-    monkeypatch.setattr("scraper.scrapers.base.extract_post_data", mock_extract)
-    monkeypatch.setattr("scraper.scrapers.base.save_to_file", mock_save)
+    monkeypatch.setattr("scraper.substack.extract_post_data", mock_extract)
+    monkeypatch.setattr("scraper.substack.save_to_file", mock_save)
 
     scraper.scrape_posts()
 
@@ -552,7 +583,7 @@ def test_scrape_posts_rescrapes_existing_when_overwrite_is_true(tmp_path, monkey
     existing_md.write_text("old content", encoding="utf-8")
 
     mock_soup = Mock()
-    scraper.get_url_soup = Mock(return_value=mock_soup)
+    scraper.fetcher.fetch_soup = Mock(return_value=mock_soup)
 
     fake_extracted = {
         "title": "Updated Title",
@@ -572,8 +603,8 @@ def test_scrape_posts_rescrapes_existing_when_overwrite_is_true(tmp_path, monkey
     }
     mock_extract = Mock(return_value=fake_extracted)
     mock_save = Mock()
-    monkeypatch.setattr("scraper.scrapers.base.extract_post_data", mock_extract)
-    monkeypatch.setattr("scraper.scrapers.base.save_to_file", mock_save)
+    monkeypatch.setattr("scraper.substack.extract_post_data", mock_extract)
+    monkeypatch.setattr("scraper.substack.save_to_file", mock_save)
 
     scraper.scrape_posts()
 
@@ -867,19 +898,18 @@ def test_premium_auto_skip_login_when_credentials_missing_but_profile_exists(tmp
     profile_dir = tmp_path / "chrome_profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("scraper.scrapers.premium.get_credentials", lambda: (None, None))
+    monkeypatch.setattr("scraper.fetchers.playwright.get_credentials", lambda: (None, None))
     monkeypatch.setattr(scraper.BrowserManager, "get_user_data_dir", lambda browser: str(profile_dir))
 
     fake_session = MagicMock()
     fake_session.context.pages = [MagicMock()]
     monkeypatch.setattr(scraper.BrowserManager, "launch", lambda **kwargs: fake_session)
 
-    premium_scraper = scraper.PremiumSubstackScraper(
-        base_substack_url="https://example.substack.com/p/premium-post",
-        content_save_dir=str(tmp_path / "content"),
+    fetcher = PlaywrightFetcher(
+        start_url="https://example.substack.com/p/premium-post",
         use_persistent_profile=True,
     )
-    assert premium_scraper.skip_login is True
+    assert fetcher.skip_login is True
 
 
 def test_base_and_free_scrapers_use_logging(tmp_path, caplog):
@@ -888,12 +918,13 @@ def test_base_and_free_scrapers_use_logging(tmp_path, caplog):
     content_dir = tmp_path / "content"
 
     with caplog.at_level(logging.INFO):
-        scraper = FakeScraper(
+        scraper_instance = FakeScraper(
             "https://example.substack.com/p/test-post",
             content_save_dir=str(content_dir),
+            fetcher=RequestsFetcher(),
         )
 
-    assert scraper.writer_name == "example"
+    assert scraper_instance.writer_name == "example"
     assert any("Created posts directory" in record.message for record in caplog.records)
 
 
@@ -1166,7 +1197,7 @@ def test_sync_posts_up_to_date_when_no_delta(tmp_path, monkeypatch):
     }
     sync.save_sync_state(scraper.author_dir, initial_cursor)
 
-    monkeypatch.setattr("scraper.scrapers.base.fetch_posts_from_api", Mock(return_value=[]))
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=[]))
 
     synced_count = scraper.sync_posts()
     assert synced_count == 0
@@ -1203,7 +1234,7 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path, monkeypatch):
             "canonical_url": "https://example.substack.com/p/intermediate-post",
         },
     ]
-    monkeypatch.setattr("scraper.scrapers.base.fetch_posts_from_api", Mock(return_value=delta_api_posts))
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=delta_api_posts))
 
     scraped_urls = []
 
@@ -1219,7 +1250,7 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path, monkeypatch):
 
     scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
     save_posts_mock = Mock()
-    monkeypatch.setattr("scraper.scrapers.base.save_posts_data_to_json", save_posts_mock)
+    monkeypatch.setattr("scraper.substack.save_posts_data_to_json", save_posts_mock)
 
     synced_count = scraper.sync_posts()
     assert synced_count == 2
@@ -1357,60 +1388,48 @@ def test_cli_validation_valid_single_post_number_one():
 
 
 def test_is_rate_limited_detection():
-    """Verify _is_rate_limited correctly identifies 429 pre tags."""
+    """Verify is_rate_limited correctly identifies 429 pre tags."""
     from bs4 import BeautifulSoup
-
-    from scraper.scrapers.base import BaseSubstackScraper
 
     rate_limited_html = "<html><body><pre>error: too many requests, please slow down</pre></body></html>"
     normal_html = "<html><body><pre>code block</pre><div>content</div></body></html>"
     empty_html = "<html><body><div>content only</div></body></html>"
 
-    assert BaseSubstackScraper._is_rate_limited(BeautifulSoup(rate_limited_html, "html.parser")) is True
-    assert BaseSubstackScraper._is_rate_limited(BeautifulSoup(normal_html, "html.parser")) is False
-    assert BaseSubstackScraper._is_rate_limited(BeautifulSoup(empty_html, "html.parser")) is False
+    assert rate_limit.is_rate_limited(BeautifulSoup(rate_limited_html, "html.parser")) is True
+    assert rate_limit.is_rate_limited(BeautifulSoup(normal_html, "html.parser")) is False
+    assert rate_limit.is_rate_limited(BeautifulSoup(empty_html, "html.parser")) is False
 
 
 def test_compute_backoff_delay_range():
-    """Verify _compute_backoff_delay produces values within jittered bounds."""
-    from scraper.scrapers.base import BaseSubstackScraper
-
+    """Verify compute_backoff_delay produces values within jittered bounds."""
     for attempt in range(1, 5):
         base_delay = 2.0**attempt
-        delay = BaseSubstackScraper._compute_backoff_delay(attempt, jitter_ratio=0.2)
+        delay = rate_limit.compute_backoff_delay(attempt, jitter_ratio=0.2)
         assert 0.8 * base_delay <= delay <= 1.2 * base_delay
 
 
 def test_handle_rate_limit_backs_off_and_raises_at_max(monkeypatch):
-    """Verify _handle_rate_limit sleeps on transient rate-limit and raises on max attempts."""
+    """Verify handle_rate_limit sleeps on transient rate-limit and raises on max attempts."""
     from bs4 import BeautifulSoup
-
-    from scraper.scrapers.base import BaseSubstackScraper
 
     rate_limited_soup = BeautifulSoup("<pre>Too Many Requests</pre>", "html.parser")
     normal_soup = BeautifulSoup("<div>Clean content</div>", "html.parser")
 
     # Not rate limited returns False immediately without sleeping
     slept_durations: list[float] = []
-    monkeypatch.setattr("scraper.scrapers.base.sleep", lambda duration: slept_durations.append(duration))
+    monkeypatch.setattr("scraper.fetchers.rate_limit.sleep", lambda duration: slept_durations.append(duration))
 
-    assert (
-        BaseSubstackScraper._handle_rate_limit(normal_soup, attempt=1, max_attempts=3, url="https://example.com")
-        is False
-    )
+    assert rate_limit.handle_rate_limit(normal_soup, attempt=1, max_attempts=3, url="https://example.com") is False
     assert len(slept_durations) == 0
 
     # Rate limited on attempt 1 sleeps and returns True
-    assert (
-        BaseSubstackScraper._handle_rate_limit(rate_limited_soup, attempt=1, max_attempts=3, url="https://example.com")
-        is True
-    )
+    assert rate_limit.handle_rate_limit(rate_limited_soup, attempt=1, max_attempts=3, url="https://example.com") is True
     assert len(slept_durations) == 1
     assert slept_durations[0] > 0
 
     # Rate limited on attempt == max_attempts raises RuntimeError
     with pytest.raises(RuntimeError, match="Max attempts reached"):
-        BaseSubstackScraper._handle_rate_limit(rate_limited_soup, attempt=3, max_attempts=3, url="https://example.com")
+        rate_limit.handle_rate_limit(rate_limited_soup, attempt=3, max_attempts=3, url="https://example.com")
 
 
 def test_extract_post_body_element_and_html_fallbacks():
@@ -1566,7 +1585,7 @@ def test_scrape_single_post_dumps_debug_html_on_extraction_failure(tmp_path):
     from bs4 import BeautifulSoup
 
     invalid_soup = BeautifulSoup("<html><body><div>No body</div></body></html>", "html.parser")
-    scraper_instance.get_url_soup = Mock(return_value=invalid_soup)
+    scraper_instance.fetcher.fetch_soup = Mock(return_value=invalid_soup)
 
     result = scraper_instance._scrape_single_post("https://example.substack.com/p/bad-post")
     assert result is None
@@ -1574,3 +1593,160 @@ def test_scrape_single_post_dumps_debug_html_on_extraction_failure(tmp_path):
     debug_file = tmp_path / "_debug" / "example" / "bad-post.html"
     assert debug_file.exists()
     assert "No body" in debug_file.read_text(encoding="utf-8")
+
+
+def test_substack_scraper_context_manager_closes_fetcher():
+    """Verify SubstackScraper context manager closes its fetcher normally and on exception."""
+    fake_fetcher = FakeFetcher()
+    with scraper.SubstackScraper("https://example.substack.com", fetcher=fake_fetcher):
+        assert not fake_fetcher.closed
+    assert fake_fetcher.closed is True
+
+    failing_fetcher = FakeFetcher()
+    with pytest.raises(RuntimeError, match="Context error"):
+        with scraper.SubstackScraper("https://example.substack.com", fetcher=failing_fetcher):
+            raise RuntimeError("Context error")
+    assert failing_fetcher.closed is True
+
+
+def test_playwright_fetcher_close_is_idempotent():
+    """Verify closing PlaywrightFetcher multiple times does not raise."""
+    fetcher = PlaywrightFetcher.__new__(PlaywrightFetcher)
+    mock_session = MagicMock()
+    fetcher.session = mock_session
+    fetcher.close()
+    mock_session.close.assert_called_once()
+    assert fetcher.session is None
+
+    # Second call should be a safe no-op
+    fetcher.close()
+    assert mock_session.close.call_count == 1
+
+
+def test_cli_builds_requests_fetcher_by_default(monkeypatch):
+    """Verify CLI builds RequestsFetcher by default."""
+    from scraper.cli import _build_page_fetcher
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["scraper", "--url", "https://example.substack.com"],
+    )
+    args = scraper.parse_args()
+    fetcher = _build_page_fetcher(args)
+    assert isinstance(fetcher, RequestsFetcher)
+
+
+def test_cli_builds_playwright_fetcher_with_premium(monkeypatch):
+    """Verify CLI builds PlaywrightFetcher when --premium is set."""
+    from scraper.cli import _build_page_fetcher
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["scraper", "--url", "https://example.substack.com", "--premium", "--skip-login"],
+    )
+    args = scraper.parse_args()
+
+    mock_session = MagicMock()
+    monkeypatch.setattr("scraper.fetchers.playwright.BrowserManager.launch", lambda **kwargs: mock_session)
+    fetcher = _build_page_fetcher(args)
+    assert isinstance(fetcher, PlaywrightFetcher)
+
+
+def test_cli_closes_fetcher_when_scraper_init_fails(monkeypatch):
+    """Verify CLI closes the fetcher via ExitStack even if SubstackScraper.__init__ fails."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["scraper", "--url", "https://example.substack.com"],
+    )
+    fake_fetcher = FakeFetcher()
+    monkeypatch.setattr("scraper.cli._build_page_fetcher", lambda args: fake_fetcher)
+    monkeypatch.setattr("scraper.cli.SubstackScraper.__init__", Mock(side_effect=RuntimeError("Init boom")))
+
+    with pytest.raises(RuntimeError, match="Init boom"):
+        scraper.main()
+
+    assert fake_fetcher.closed is True
+
+
+def test_playwright_fetcher_closes_session_when_login_fails(monkeypatch):
+    """Verify PlaywrightFetcher closes the launched browser session if _login raises."""
+    mock_session = MagicMock()
+    mock_session.context.pages = [MagicMock()]
+    monkeypatch.setattr("scraper.fetchers.playwright.get_credentials", lambda: ("user@example.com", "secret"))
+    monkeypatch.setattr("scraper.fetchers.playwright.BrowserManager.launch", lambda **kwargs: mock_session)
+    monkeypatch.setattr(
+        PlaywrightFetcher,
+        "_login",
+        Mock(side_effect=RuntimeError("Login unsuccessful")),
+    )
+
+    with pytest.raises(RuntimeError, match="Login unsuccessful"):
+        PlaywrightFetcher(skip_login=False)
+
+    mock_session.close.assert_called_once()
+
+
+def test_requests_fetcher_fetch_soup_success_and_paywall_skip(monkeypatch):
+    """Verify RequestsFetcher returns parsed soup for public posts and None on paywalled posts."""
+
+    class FakeHttpResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+
+    monkeypatch.setattr(
+        "scraper.fetchers.http.requests.get",
+        lambda url, headers=None, timeout=30: FakeHttpResponse(b"<html><body><p>Public post</p></body></html>"),
+    )
+    fetcher = RequestsFetcher()
+    public_soup = fetcher.fetch_soup("https://example.substack.com/p/public")
+    assert public_soup is not None
+    assert "Public post" in public_soup.text
+
+    monkeypatch.setattr(
+        "scraper.fetchers.http.requests.get",
+        lambda url, headers=None, timeout=30: FakeHttpResponse(
+            b'<html><body><h2 class="paywall-title">Subscribe to read</h2></body></html>'
+        ),
+    )
+    paywall_soup = fetcher.fetch_soup("https://example.substack.com/p/paid")
+    assert paywall_soup is None
+
+
+def test_requests_fetcher_fetch_soup_retries_on_rate_limit(monkeypatch):
+    """Verify RequestsFetcher backs off on 429 rate limits and succeeds on retry."""
+
+    class FakeHttpResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+
+    responses = iter(
+        [
+            FakeHttpResponse(b"<html><body><pre>Too Many Requests</pre></body></html>"),
+            FakeHttpResponse(b"<html><body><div class='available-content'>Recovered</div></body></html>"),
+        ]
+    )
+    monkeypatch.setattr("scraper.fetchers.http.requests.get", lambda url, headers=None, timeout=30: next(responses))
+    slept_durations: list[float] = []
+    monkeypatch.setattr("scraper.fetchers.rate_limit.sleep", lambda duration: slept_durations.append(duration))
+
+    fetcher = RequestsFetcher()
+    soup = fetcher.fetch_soup("https://example.substack.com/p/rate-limited", max_attempts=3)
+    assert soup is not None
+    assert "Recovered" in soup.text
+    assert len(slept_durations) == 1
+
+
+def test_requests_fetcher_fetch_soup_raises_value_error_on_request_exception(monkeypatch):
+    """Verify RequestsFetcher wraps requests.RequestException into ValueError."""
+    import requests as req
+
+    monkeypatch.setattr(
+        "scraper.fetchers.http.requests.get",
+        Mock(side_effect=req.ConnectionError("Connection refused")),
+    )
+    fetcher = RequestsFetcher()
+    with pytest.raises(ValueError, match="Error fetching page"):
+        fetcher.fetch_soup("https://example.substack.com/p/fail")

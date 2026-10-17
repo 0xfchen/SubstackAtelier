@@ -11,7 +11,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
-from .converter import convert_html_to_markdown, normalize_markdown
+from scraper.converter import convert_html_to_markdown, normalize_markdown
 
 logger = logging.getLogger(__name__)
 

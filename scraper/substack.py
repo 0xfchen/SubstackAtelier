@@ -1,27 +1,26 @@
-"""Abstract base scraper defining Substack scraping orchestration."""
+"""Substack scraper coordinating post discovery, extraction, and archiving."""
 
 from __future__ import annotations
 
 import logging
 import os
-import random
-from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
-from time import sleep
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from ..config import BASE_CONTENT_DIR
-from ..discovery import discover_post_urls
-from ..extract import extract_post_data
-from ..frontmatter import combine_metadata_and_content, extract_metadata_from_md
-from ..images import count_images_in_markdown, process_markdown_images
-from ..storage import build_file_link, get_filename_from_url, save_posts_data_to_json, save_to_file
-from ..sync import fetch_posts_from_api, load_sync_state, save_sync_state
-from ..url_utils import (
+from scraper.config import BASE_CONTENT_DIR
+from scraper.discovery import discover_post_urls
+from scraper.extract import extract_post_data
+from scraper.fetchers.base import PageFetcher
+from scraper.frontmatter import combine_metadata_and_content, extract_metadata_from_md
+from scraper.images import count_images_in_markdown, process_markdown_images
+from scraper.storage import build_file_link, get_filename_from_url, save_posts_data_to_json, save_to_file
+from scraper.sync import fetch_posts_from_api, load_sync_state, save_sync_state
+from scraper.url_utils import (
     extract_main_part,
     get_post_slug,
     get_publication_url,
@@ -32,30 +31,33 @@ from ..url_utils import (
 logger = logging.getLogger(__name__)
 
 
-class BaseSubstackScraper(ABC):
-    """Abstract base scraper coordinating Substack post discovery, extraction, and archiving.
+class SubstackScraper:
+    """Scraper coordinating Substack post discovery, extraction, and archiving.
 
-    Delegates parsing, URL discovery, frontmatter, file operations, and sync logic
-    to focused modules while managing the high-level scraping lifecycle.
+    Delegates transport fetching to an injected PageFetcher, and parsing, URL discovery,
+    frontmatter, file operations, and sync logic to focused support modules.
     """
 
     def __init__(
         self,
         base_substack_url: str,
+        fetcher: PageFetcher,
         content_save_dir: str = BASE_CONTENT_DIR,
         download_images: bool = False,
         overwrite: bool = False,
         clean_content: bool = True,
     ) -> None:
-        """Initialize base scraper configuration and target directories.
+        """Initialize scraper configuration, page fetcher, and target directories.
 
         Args:
             base_substack_url: Publication homepage or individual post URL.
+            fetcher: Transport implementation conforming to PageFetcher protocol.
             content_save_dir: Root directory for author-centric exports (defaults to 'content').
             download_images: Whether to download CDN images locally.
             overwrite: Whether to overwrite existing files on disk when scraping.
             clean_content: Whether to strip promotional widgets and subscription CTAs.
         """
+        self.fetcher: PageFetcher = fetcher
         self.overwrite: bool = overwrite
         self.clean_content: bool = clean_content
         self.is_single_post: bool = is_post_url(base_substack_url)
@@ -89,43 +91,18 @@ class BaseSubstackScraper(ABC):
         else:
             self.post_urls: list[str] = discover_post_urls(self.base_substack_url)
 
-    @staticmethod
-    def _is_rate_limited(soup: BeautifulSoup) -> bool:
-        """Check whether the parsed DOM indicates a rate-limiting error."""
-        pre = soup.select_one("body > pre") or soup.find("pre")
-        return bool(pre and "too many requests" in pre.text.lower())
+    def __enter__(self) -> Self:
+        """Enter runtime context."""
+        return self
 
-    @staticmethod
-    def _compute_backoff_delay(attempt: int, jitter_ratio: float = 0.2) -> float:
-        """Compute exponential backoff with jitter for a retry attempt."""
-        base_delay = 2.0**attempt
-        jitter_range = jitter_ratio * base_delay
-        return base_delay + random.uniform(-jitter_range, jitter_range)
-
-    @classmethod
-    def _handle_rate_limit(
-        cls,
-        soup: BeautifulSoup,
-        attempt: int,
-        max_attempts: int,
-        url: str,
-    ) -> bool:
-        """Check for rate limits and sleep with jittered exponential backoff if detected."""
-        if not cls._is_rate_limited(soup):
-            return False
-
-        if attempt == max_attempts:
-            raise RuntimeError(f"Max attempts reached for URL: {url}. Too many requests.")
-
-        delay = cls._compute_backoff_delay(attempt)
-        logger.warning(
-            "[%s/%s] Too many requests. Retrying in %.2f seconds...",
-            attempt,
-            max_attempts,
-            delay,
-        )
-        sleep(delay)
-        return True
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exit runtime context and close injected fetcher resources."""
+        self.fetcher.close()
 
     def _dump_debug_html(self, soup: BeautifulSoup, url: str) -> None:
         """Dump raw HTML to _debug directory upon extraction failure."""
@@ -168,7 +145,7 @@ class BaseSubstackScraper(ABC):
                 existing_entry.update(extracted_metadata)
             return existing_entry
 
-        soup = self.get_url_soup(url)
+        soup = self.fetcher.fetch_soup(url)
         if soup is None:
             return None
 
@@ -363,8 +340,3 @@ class BaseSubstackScraper(ABC):
 
         logger.info("Sync completed: %d post(s) synced successfully.", len(new_entries))
         return len(new_entries)
-
-    @abstractmethod
-    def get_url_soup(self, url: str) -> BeautifulSoup | None:
-        """Fetch and parse HTML for a given post URL."""
-        pass

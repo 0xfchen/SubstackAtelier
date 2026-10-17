@@ -14,7 +14,7 @@ Substack2Markdown is a modular Python package designed to scrape and archive Sub
 ### Architecture & Module Interactions
 
 ```mermaid
-flowchart TD
+flowchart LR
     CLI["CLI Entrypoint<br/><code>scraper/__main__.py</code><br/><code>scraper/cli.py</code>"]
     Config["Configuration & Credentials<br/><code>scraper/config.py</code>"]
     URLUtils["URL Parsing & Slug Utilities<br/><code>scraper/url_utils.py</code>"]
@@ -28,27 +28,32 @@ flowchart TD
     Storage["Storage & Metadata Merging<br/><code>scraper/storage.py</code>"]
     Sync["Incremental Sync State & Delta API<br/><code>scraper/sync.py</code>"]
 
-    subgraph Scrapers ["Scraper Subpackage (scraper/scrapers/)"]
-        BaseScraper["BaseSubstackScraper (ABC)<br/><code>scrapers/base.py</code>"]
-        FreeScraper["SubstackScraper (Free/Public)<br/><code>scrapers/free.py</code>"]
-        PremiumScraper["PremiumSubstackScraper (Playwright)<br/><code>scrapers/premium.py</code>"]
+    subgraph Fetchers ["Fetchers Subpackage (scraper/fetchers/)"]
+        PageFetcher["PageFetcher (Protocol)<br/><code>fetchers/base.py</code>"]
+        RequestsFetcher["RequestsFetcher<br/><code>fetchers/http.py</code>"]
+        PlaywrightFetcher["PlaywrightFetcher<br/><code>fetchers/playwright.py</code>"]
+        RateLimit["Rate Limiting & Backoff<br/><code>fetchers/rate_limit.py</code>"]
     end
 
+    SubstackScraper["SubstackScraper<br/><code>scraper/substack.py</code>"]
+
     CLI --> Config
-    CLI --> FreeScraper
-    CLI --> PremiumScraper
+    CLI --> Fetchers
+    CLI --> SubstackScraper
     
-    FreeScraper -- inherits --> BaseScraper
-    PremiumScraper -- inherits --> BaseScraper
+    SubstackScraper --> PageFetcher
+    RequestsFetcher -- implements --> PageFetcher
+    PlaywrightFetcher -- implements --> PageFetcher
+    RequestsFetcher --> RateLimit
+    PlaywrightFetcher --> RateLimit
     
-    BaseScraper --> Discovery & Extract & Frontmatter & Storage & Sync & Images & Config & URLUtils
+    SubstackScraper --> Discovery & Extract & Frontmatter & Storage & Sync & Images & Config & URLUtils
     Extract --> Converter
     Discovery --> Config
     Sync --> Config
-    Storage --> URLUtils
     
-    PremiumScraper --> Browser
-    PremiumScraper --> Config
+    PlaywrightFetcher --> Browser
+    PlaywrightFetcher --> Config
 ```
 
 ### Module Responsibilities
@@ -61,10 +66,10 @@ flowchart LR
         init["__init__.py"]
     end
 
-    subgraph CoreEngine ["Scraping Engine"]
-        base["scrapers/base.py<br/>BaseSubstackScraper (ABC)"]
-        free["scrapers/free.py<br/>SubstackScraper (Requests)"]
-        prem["scrapers/premium.py<br/>PremiumSubstackScraper (Playwright)"]
+    subgraph CoreEngine ["Scraping Engine & Fetchers"]
+        scrp["substack.py<br/>SubstackScraper"]
+        ftch["fetchers/http.py & playwright.py<br/>Requests & Playwright Fetchers"]
+        rlmt["fetchers/rate_limit.py<br/>Backoff & 429 Retry"]
     end
 
     subgraph Services ["Support Modules"]
@@ -82,15 +87,15 @@ flowchart LR
     end
 
     main --> cli
-    cli --> free & prem
-    init --> cli & base & free & prem
+    cli --> scrp & ftch
+    init --> cli & scrp & ftch
     
-    free --> base
-    prem --> base
+    scrp --> ftch
+    ftch --> rlmt
     
-    base --> cfg & url & dsc & ext & fmt & strg & snc & img & cat
+    scrp --> cfg & url & dsc & ext & fmt & strg & snc & img & cat
     ext --> cnv
-    prem --> brw
+    ftch --> brw
 ```
 
 - [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), `EXCLUDED_URL_KEYWORDS`, timeouts, and `get_credentials()` which loads from `.env` or environment variables.
@@ -104,12 +109,14 @@ flowchart LR
 - [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, missing image alt normalization, and `normalize_markdown()`.
 - [`scraper/images.py`](scraper/images.py): Image URL resolution, filename sanitization, linked image cleanup, and parallel downloads into `content/<author>/images/<slug>/` via `ThreadPoolExecutor`.
 - [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles, and CDP attach.
-- [`scraper/scrapers/base.py`](scraper/scrapers/base.py): Abstract base class coordinating orchestration, rate-limit backoff handling, and post scraping/syncing loops.
-- [`scraper/scrapers/free.py`](scraper/scrapers/free.py): Public post scraper using `requests` and `BeautifulSoup` with jittered exponential backoff on HTTP 429 errors.
-- [`scraper/scrapers/premium.py`](scraper/scrapers/premium.py): Authenticated scraper for paid posts using Playwright, supporting session redirect detection, SSR hydration waits, persistent profiles, storage_state.json, and interactive CAPTCHA completion.
-- [`scraper/cli.py`](scraper/cli.py): CLI argument parser and execution coordinator.
+- [`scraper/fetchers/base.py`](scraper/fetchers/base.py): `PageFetcher` protocol (`fetch_soup`, `close`).
+- [`scraper/fetchers/rate_limit.py`](scraper/fetchers/rate_limit.py): Jittered exponential backoff and HTTP 429 rate limit detection (`is_rate_limited`, `compute_backoff_delay`, `handle_rate_limit`).
+- [`scraper/fetchers/http.py`](scraper/fetchers/http.py): `RequestsFetcher` for free / public Substack posts via `requests` and `BeautifulSoup`.
+- [`scraper/fetchers/playwright.py`](scraper/fetchers/playwright.py): `PlaywrightFetcher` for authenticated / premium Substack posts using Playwright with session reuse and retry handling.
+- [`scraper/substack.py`](scraper/substack.py): Concrete `SubstackScraper` class receiving an injected `PageFetcher` and coordinating post scraping and sync loops.
+- [`scraper/cli.py`](scraper/cli.py): CLI argument parser, `_build_page_fetcher`, and execution coordinator managing deterministic cleanup via `contextlib.ExitStack`.
 - [`reader/`](reader/): Static Astro reader based on Astro Tone, ingesting `../content/**/posts/*.{md,mdx}` with full-text search (Pagefind), tag filtering, syntax highlighting, and dark mode.
-- [`tests/test_scraper.py`](tests/test_scraper.py): Comprehensive unit and integration test suite (129 tests).
+- [`tests/test_scraper.py`](tests/test_scraper.py): Comprehensive unit and integration test suite (138 tests).
 
 ## Project Structure & Outputs
 - `content/<author>/posts/<slug>.md`: Scraped markdown files with rich YAML frontmatter.

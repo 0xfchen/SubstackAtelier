@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 from time import sleep
@@ -6,9 +8,8 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from ..browser import BrowserManager, PlaywrightSession
-from ..config import (
-    BASE_CONTENT_DIR,
+from scraper.browser import BrowserManager, PlaywrightSession
+from scraper.config import (
     PLAYWRIGHT_CONTENT_RENDER_TIMEOUT_MS,
     PLAYWRIGHT_HYDRATION_TIMEOUT_MS,
     PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS,
@@ -16,19 +17,16 @@ from ..config import (
     PLAYWRIGHT_SELECTOR_TIMEOUT_MS,
     get_credentials,
 )
-from .base import BaseSubstackScraper
+from scraper.fetchers.rate_limit import handle_rate_limit
 
 logger = logging.getLogger(__name__)
 
 
-class PremiumSubstackScraper(BaseSubstackScraper):
-    """Scraper implementation for subscriber-only / premium Substack posts using Playwright."""
+class PlaywrightFetcher:
+    """Page fetcher implementation for authenticated / premium Substack posts using Playwright."""
 
     def __init__(
         self,
-        base_substack_url: str,
-        content_save_dir: str = BASE_CONTENT_DIR,
-        download_images: bool = False,
         browser: str = "chrome",
         headless: bool = False,
         browser_path: str = "",
@@ -37,15 +35,11 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         skip_login: bool = False,
         storage_state: str = "",
         cdp_url: str = "",
-        overwrite: bool = False,
-        clean_content: bool = True,
+        start_url: str = "",
     ) -> None:
-        """Initialize the premium scraper with Playwright browser automation.
+        """Initialize the premium fetcher with Playwright browser automation.
 
         Args:
-            base_substack_url: Target Substack publication or post URL.
-            content_save_dir: Root directory for author-centric exports (defaults to 'content').
-            download_images: Whether to download images locally.
             browser: Automation browser ('chrome' or 'edge').
             headless: Whether to execute browser headlessly.
             browser_path: Optional explicit path to browser executable.
@@ -54,8 +48,7 @@ class PremiumSubstackScraper(BaseSubstackScraper):
             skip_login: Whether to bypass login when reusing authenticated profile or session.
             storage_state: Optional path to storage state JSON file for saved cookies.
             cdp_url: Optional remote debugging URL (CDP) to attach to an active browser.
-            overwrite: Whether to re-scrape and overwrite existing markdown files.
-            clean_content: Whether to strip promotional widgets and subscription CTAs.
+            start_url: Publication or initial URL to navigate to when skipping login.
 
         Raises:
             ValueError: If credentials are missing when login is required.
@@ -89,7 +82,7 @@ class PremiumSubstackScraper(BaseSubstackScraper):
                     "pass --persistent-profile --skip-login, --storage-state, or --cdp-url instead."
                 )
 
-        self.session: PlaywrightSession = BrowserManager.launch(
+        self.session: PlaywrightSession | None = BrowserManager.launch(
             browser=browser,
             headless=headless,
             browser_path=browser_path,
@@ -99,26 +92,23 @@ class PremiumSubstackScraper(BaseSubstackScraper):
             cdp_url=cdp_url,
         )
 
-        self.context = self.session.context
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
-        self.skip_login = skip_login
-        self.use_persistent_profile = use_persistent_profile
-        self.storage_state = storage_state or BrowserManager.DEFAULT_STORAGE_STATE_PATH
+        try:
+            self.context = self.session.context
+            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            self.skip_login = skip_login
+            self.use_persistent_profile = use_persistent_profile
+            self.storage_state = storage_state or BrowserManager.DEFAULT_STORAGE_STATE_PATH
 
-        if not skip_login and not cdp_url:
-            self._login()
-        else:
-            logger.info("Skipping login (using existing profile or active browser session)")
-            self.page.goto(base_substack_url, wait_until="domcontentloaded")
-            sleep(2)
-
-        super().__init__(
-            base_substack_url=base_substack_url,
-            content_save_dir=content_save_dir,
-            download_images=download_images,
-            overwrite=overwrite,
-            clean_content=clean_content,
-        )
+            if not skip_login and not cdp_url:
+                self._login()
+            else:
+                logger.info("Skipping login (using existing profile or active browser session)")
+                if start_url:
+                    self.page.goto(start_url, wait_until="domcontentloaded")
+                    sleep(2)
+        except BaseException:
+            self.close()
+            raise
 
     def _save_session_state(self) -> None:
         """Persist session cookies and localStorage to storage_state.json."""
@@ -137,7 +127,10 @@ class PremiumSubstackScraper(BaseSubstackScraper):
 
         # If session is already authenticated, Substack immediately redirects away from /sign-in
         if "sign-in" not in self.page.url:
-            logger.info("Session already authenticated (redirected to %s). Skipping login form.", self.page.url)
+            logger.info(
+                "Session already authenticated (redirected to %s). Skipping login form.",
+                self.page.url,
+            )
             self._save_session_state()
             return
 
@@ -161,7 +154,8 @@ class PremiumSubstackScraper(BaseSubstackScraper):
             logger.warning("Notice during form fill: %s", exc)
 
         logger.info(
-            "Waiting for login to complete (this may take up to %d seconds)...", PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS
+            "Waiting for login to complete (this may take up to %d seconds)...",
+            PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS,
         )
         for _ in range(PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS):
             sleep(1)
@@ -181,7 +175,7 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         logger.info("Login successful!")
         self._save_session_state()
 
-    def get_url_soup(self, url: str, max_attempts: int = 5) -> BeautifulSoup | None:
+    def fetch_soup(self, url: str, max_attempts: int = 5) -> BeautifulSoup | None:
         """Fetch and parse post HTML using authenticated Playwright session.
 
         Args:
@@ -201,9 +195,15 @@ class PremiumSubstackScraper(BaseSubstackScraper):
                     self.page.goto(url, wait_until="domcontentloaded")
                 except PlaywrightError as exc:
                     if "interrupted by another navigation" in str(exc).lower():
-                        logger.debug("Navigation interrupted by redirect. Awaiting settled load state: %s", exc)
+                        logger.debug(
+                            "Navigation interrupted by redirect. Awaiting settled load state: %s",
+                            exc,
+                        )
                         try:
-                            self.page.wait_for_load_state("domcontentloaded", timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS)
+                            self.page.wait_for_load_state(
+                                "domcontentloaded",
+                                timeout=PLAYWRIGHT_NAVIGATION_TIMEOUT_MS,
+                            )
                         except PlaywrightError:
                             pass
                     else:
@@ -223,7 +223,9 @@ class PremiumSubstackScraper(BaseSubstackScraper):
                 if self.page.locator("h2.paywall-title").count() > 0:
                     try:
                         self.page.wait_for_selector(
-                            "h2.paywall-title", state="detached", timeout=PLAYWRIGHT_HYDRATION_TIMEOUT_MS
+                            "h2.paywall-title",
+                            state="detached",
+                            timeout=PLAYWRIGHT_HYDRATION_TIMEOUT_MS,
                         )
                     except PlaywrightTimeoutError:
                         pass
@@ -231,7 +233,7 @@ class PremiumSubstackScraper(BaseSubstackScraper):
                 html_content = self.page.content()
                 soup = BeautifulSoup(html_content, "html.parser")
 
-                if self._handle_rate_limit(soup, attempt, max_attempts, url):
+                if handle_rate_limit(soup, attempt, max_attempts, url):
                     continue
 
                 if soup.find("h2", class_="paywall-title"):
@@ -255,10 +257,13 @@ class PremiumSubstackScraper(BaseSubstackScraper):
 
         raise RuntimeError(f"Failed to fetch page after {max_attempts} attempts: {url}")
 
-    def __del__(self) -> None:
-        """Clean up the browser session when done."""
-        if hasattr(self, "session") and self.session:
+    def close(self) -> None:
+        """Clean up the browser session (idempotent)."""
+        session = getattr(self, "session", None)
+        if session is not None:
             try:
-                self.session.close()
+                session.close()
             except PlaywrightError as exc:
                 logger.debug("Error closing session on cleanup: %s", exc)
+            finally:
+                self.session = None

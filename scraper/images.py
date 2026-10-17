@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 import requests
 
-from .config import (
+from scraper.config import (
     BASE_CONTENT_DIR,
     DEFAULT_REQUEST_TIMEOUT,
     MAX_IMAGE_WORKERS,

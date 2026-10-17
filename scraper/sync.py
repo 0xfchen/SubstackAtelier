@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from .config import (
+from scraper.config import (
     DEFAULT_API_POST_LIMIT,
     DEFAULT_REQUEST_TIMEOUT,
     MAX_API_SYNC_PAGES,
