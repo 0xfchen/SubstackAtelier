@@ -33,14 +33,14 @@ flowchart TD
 
 | Subsystem / Layer | Module & Location | Role & Primary Responsibility | Upstream Inputs | Downstream Outputs |
 | :--- | :--- | :--- | :--- | :--- |
-| **Data Generation** | `src/pages/api/graph.json.ts`<br>[`graph-data.ts`](file:///f:/Codes/Substack2Markdown/reader/src/utils/graph-data.ts) | Statically compiles articles, topic tags, and author clusters into a unified node/link topology at build time. | Astro Content Collection (`posts`) | Static `/graph.json` payload |
-| **Page Layout** | [`graph.astro`](file:///f:/Codes/Substack2Markdown/reader/src/pages/graph.astro)<br>[`graph.css`](file:///f:/Codes/Substack2Markdown/reader/src/styles/pages/graph.css) | Full-bleed viewport shell embedding layout, HUD overlay chrome, metadata headers, and global theme observers. | Route request (`/graph`) | DOM container & initial layout |
-| **Scene Bridge** | [`ThreeGraphScene.astro`](file:///f:/Codes/Substack2Markdown/reader/src/components/ThreeGraphScene.astro) | Astro client component mounting the WebGL canvas, HUD controls (search, filters, timeline scrubber), and lifecycle teardown. | `/graph.json` + `graph.astro` | Canvas context & interactive HUD events |
-| **Engine Coordinator** | [`three-graph.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/three-graph.ts) | Central WebGL orchestrator managing Three.js scene, `OrbitControls`, camera fly-to easing, raycasting, and 60 FPS animation loop. | `ThreeGraphScene.astro` | Dynamic 3D interactive knowledge constellation |
-| **3D Physics Engine** | [`physics.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/physics.ts) | Velocity Verlet force simulation computing $O(n^2)$ electrostatic repulsion, spring links, stride sampling, and alpha freeze threshold. | Node & link topology | Updated 3D particle positions `(x, y, z)` |
-| **Geometric Taxonomy** | [`mesh-factory.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/mesh-factory.ts) | Dual-theme geometry factory instantiating celestial bodies (dark) or architectural folios (light) with glow halos and edge lines. | `GraphNode` attributes & active theme | Three.js Meshes, BufferGeometries, Materials |
-| **Temporal Scrubber** | [`timeline.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/timeline.ts) | Chronological playback engine supporting date range filtering, play/pause historical growth playback, and active node bitmasks. | Publication ISO timestamps & UI slider | Filtered node visibility & alpha fades |
-| **HUD & Tooltip** | [`inspector.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/inspector.ts) | Glassmorphic HUD overlay and raycasting tooltip inspector displaying reading status, word counts, and fly-to CTA triggers. | Mouse pointer hover & click hits | Dynamic HTML HUD overlay card |
+| **Data Generation** | `src/pages/api/graph.json.ts`<br>[`graph-data.ts`](file:///f:/Codes/SubstackAtelier/reader/src/utils/graph-data.ts) | Statically compiles articles, topic tags, and author clusters into a unified node/link topology at build time. | Astro Content Collection (`posts`) | Static `/graph.json` payload |
+| **Page Layout** | [`graph.astro`](file:///f:/Codes/SubstackAtelier/reader/src/pages/graph.astro)<br>[`graph.css`](file:///f:/Codes/SubstackAtelier/reader/src/styles/pages/graph.css) | Full-bleed viewport shell embedding layout, HUD overlay chrome, metadata headers, and global theme observers. | Route request (`/graph`) | DOM container & initial layout |
+| **Scene Bridge** | [`ThreeGraphScene.astro`](file:///f:/Codes/SubstackAtelier/reader/src/components/ThreeGraphScene.astro) | Astro client component mounting the WebGL canvas, HUD controls (search, filters, timeline scrubber), and lifecycle teardown. | `/graph.json` + `graph.astro` | Canvas context & interactive HUD events |
+| **Engine Coordinator** | [`three-graph.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/three-graph.ts) | Central WebGL orchestrator managing Three.js scene, `OrbitControls`, camera fly-to easing, raycasting, and 60 FPS animation loop. | `ThreeGraphScene.astro` | Dynamic 3D interactive knowledge constellation |
+| **3D Physics Engine** | [`physics.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/physics.ts) | Velocity Verlet force simulation computing $O(n^2)$ electrostatic repulsion, spring links, stride sampling, and alpha freeze threshold. | Node & link topology | Updated 3D particle positions `(x, y, z)` |
+| **Geometric Taxonomy** | [`mesh-factory.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/mesh-factory.ts) | Dual-theme geometry factory instantiating celestial bodies (dark) or architectural folios (light) with glow halos and edge lines. | `GraphNode` attributes & active theme | Three.js Meshes, BufferGeometries, Materials |
+| **Temporal Scrubber** | [`timeline.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/timeline.ts) | Chronological playback engine supporting date range filtering, play/pause historical growth playback, and active node bitmasks. | Publication ISO timestamps & UI slider | Filtered node visibility & alpha fades |
+| **HUD & Tooltip** | [`inspector.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/inspector.ts) | Glassmorphic HUD overlay and raycasting tooltip inspector displaying reading status, word counts, and fly-to CTA triggers. | Mouse pointer hover & click hits | Dynamic HTML HUD overlay card |
 
 ---
 
@@ -121,15 +121,15 @@ The 404 error experience is powered by a procedural Three.js aerospace engine fe
 
 ### 2. Modular 3D Graph Engine (`reader/src/scripts/graph/`)
 Decomposed the graph engine into focused, single-responsibility modules:
-- [`physics.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/physics.ts): Custom Velocity Verlet 3D force simulation with charge repulsion, spring links, bounding center gravity, and stride sampling.
-- [`mesh-factory.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/mesh-factory.ts): Dual-theme geometric taxonomy generating Ringed Planets, Nebula Spheres, and Asteroids for dark mode; Architectural Spheres, Prismatic Diamonds, and Document Folios for light mode.
-- [`timeline.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/timeline.ts): Chronological timeline scrubber with play/pause animations, date parsing, and time-range filtering.
-- [`inspector.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/inspector.ts): Glassmorphic HUD overlay and raycasting tooltip inspector with reading status indicators and metadata previews.
-- [`types.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/graph/types.ts): Strongly typed graph contracts, simulation particles, and filter states.
-- [`three-graph.ts`](file:///f:/Codes/Substack2Markdown/reader/src/scripts/three-graph.ts): Main WebGL coordinator managing `OrbitControls`, camera fly-to transitions, and event delegation.
+- [`physics.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/physics.ts): Custom Velocity Verlet 3D force simulation with charge repulsion, spring links, bounding center gravity, and stride sampling.
+- [`mesh-factory.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/mesh-factory.ts): Dual-theme geometric taxonomy generating Ringed Planets, Nebula Spheres, and Asteroids for dark mode; Architectural Spheres, Prismatic Diamonds, and Document Folios for light mode.
+- [`timeline.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/timeline.ts): Chronological timeline scrubber with play/pause animations, date parsing, and time-range filtering.
+- [`inspector.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/inspector.ts): Glassmorphic HUD overlay and raycasting tooltip inspector with reading status indicators and metadata previews.
+- [`types.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/graph/types.ts): Strongly typed graph contracts, simulation particles, and filter states.
+- [`three-graph.ts`](file:///f:/Codes/SubstackAtelier/reader/src/scripts/three-graph.ts): Main WebGL coordinator managing `OrbitControls`, camera fly-to transitions, and event delegation.
 
 ### 3. Client-Side Reading Status Button Extraction (`reader/src/scripts/reading-status-button.ts`)
-- Extracted inline client-side JavaScript from [`ReadingStatusButton.astro`](file:///f:/Codes/Substack2Markdown/reader/src/components/ReadingStatusButton.astro) into a standalone, testable TypeScript module.
+- Extracted inline client-side JavaScript from [`ReadingStatusButton.astro`](file:///f:/Codes/SubstackAtelier/reader/src/components/ReadingStatusButton.astro) into a standalone, testable TypeScript module.
 - Handles reading status updates (`unread`, `in-progress`, `completed`), read count badges, and cross-tab/multi-instance event synchronization.
 
 ### 4. Visual Scene & HUD Component (`reader/src/components/ThreeGraphScene.astro`)

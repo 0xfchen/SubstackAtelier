@@ -1,7 +1,7 @@
 /**
  * paths.ts
  *
- * Deterministic server-side path utilities for Substack2Markdown reader.
+ * Deterministic server-side path utilities for SubstackAtelier reader.
  * Anchored to import.meta.url to ensure filesystem resolution is invariant to process.cwd()
  * regardless of whether commands run from repo root or the reader directory.
  */

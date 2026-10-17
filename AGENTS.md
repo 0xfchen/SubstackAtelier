@@ -1,7 +1,7 @@
-# Substack2Markdown - Project Guidelines & Context
+# SubstackAtelier - Project Guidelines & Context
 
 ## Project Overview
-Substack2Markdown is a modular Python package designed to scrape and archive Substack newsletters (both free and premium subscriber-only content) into Markdown and HTML formats. It also provides a local Astro reader interface with full-text search and downloads images locally when requested.
+SubstackAtelier is a modular Python package designed to scrape and archive Substack newsletters (both free and premium subscriber-only content) into Markdown and HTML formats. It also provides a local Astro reader interface with full-text search and downloads images locally when requested.
 
 ## Tech Stack & Architecture
 - **Language & Standards**: Python 3.11+, PEP 8, PEP 585 (built-in generics), PEP 604 (union syntax `|`)

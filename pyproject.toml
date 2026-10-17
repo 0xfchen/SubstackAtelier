@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "substack2markdown"
+name = "SubstackAtelier"
 version = "0.1.0"
 description = "Scrape and archive Substack newsletters into Markdown and HTML formats."
 readme = "README.md"

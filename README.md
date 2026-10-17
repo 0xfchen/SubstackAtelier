@@ -1,6 +1,6 @@
-# Substack2Markdown
+# SubstackAtelier
 
-Substack2Markdown is a Python tool for downloading free and premium Substack posts and saving them into clean, structured Markdown files organized by author (`content/<author>/posts/<slug>.md`). It extracts rich post metadata, sanitizes promotional clutter, and powers a modern local static reader.
+SubstackAtelier is a Python tool for downloading free and premium Substack posts and saving them into clean, structured Markdown files organized by author (`content/<author>/posts/<slug>.md`). It extracts rich post metadata, sanitizes promotional clutter, and powers a modern local static reader.
 
 Once you run the scraper, it saves markdown files into `content/<author>/posts/` and an author catalog into `content/<author>/metadata.json`. When image downloading is enabled (`--images`), post images are saved locally into `content/<author>/images/<post_slug>/` and rewritten with relative links.
 
@@ -32,8 +32,8 @@ Once you run the scraper, it saves markdown files into `content/<author>/posts/`
 Clone the repository and install dependencies using `uv` (recommended) or `pip`:
 
 ```bash
-git clone https://github.com/0xfchen/Substack2Markdown.git
-cd Substack2Markdown
+git clone https://github.com/0xfchen/SubstackAtelier.git
+cd SubstackAtelier
 
 # Install dependencies with uv (or pip install .)
 uv sync

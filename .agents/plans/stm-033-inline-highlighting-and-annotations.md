@@ -8,7 +8,7 @@ Enable readers to select text within any article in the local Astro reader, high
 
 ## Background & Motivation
 
-Substack2Markdown archives newsletters into clean Markdown with an Astro reader for long-term study and reference. Currently, the reader provides reading queue and progress tracking (`stm-020`, `stm-028`), full-text Pagefind search, and a 3D knowledge graph (`stm-027`). However, there is no way for readers to annotate, highlight, or take notes on specific passages.
+SubstackAtelier archives newsletters into clean Markdown with an Astro reader for long-term study and reference. Currently, the reader provides reading queue and progress tracking (`stm-020`, `stm-028`), full-text Pagefind search, and a 3D knowledge graph (`stm-027`). However, there is no way for readers to annotate, highlight, or take notes on specific passages.
 
 ### Core Design Principles
 1. **Local-first & Portable**: All annotations persist locally in `content/annotations.json` via dev server middleware, backed by a synchronous `localStorage` client cache for zero latency on navigation.

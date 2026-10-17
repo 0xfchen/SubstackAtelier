@@ -1,7 +1,7 @@
 /**
  * three-graph.ts
  *
- * 3D Constellation Knowledge Graph View orchestrator for Substack2Markdown.
+ * 3D Constellation Knowledge Graph View orchestrator for SubstackAtelier.
  * Renders an interactive 3D universe of articles, topic clusters, and publication hubs.
  * Integrates force-directed physics relaxation, chronological universe expansion scrubbing,
  * reading status synchronization, and detailed cosmic inspection.

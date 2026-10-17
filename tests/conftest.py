@@ -1,4 +1,4 @@
-"""Shared test fixtures and stubs for Substack2Markdown test suite."""
+"""Shared test fixtures and stubs for SubstackAtelier test suite."""
 
 from __future__ import annotations
 

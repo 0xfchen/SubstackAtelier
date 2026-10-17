@@ -77,7 +77,7 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
 
 
 def parse_args(args_list: list[str] | None = None) -> argparse.Namespace:
-    """Parse command line arguments for the Substack2Markdown scraper CLI.
+    """Parse command line arguments for the SubstackAtelier scraper CLI.
 
     Args:
         args_list: Optional explicit command-line argument list (defaults to sys.argv[1:]).

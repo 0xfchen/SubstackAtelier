@@ -1,7 +1,7 @@
 ---
 name: commit-ticket-tracking
 description: >-
-  Tracks, documents, and categorizes every code change and commit in Substack2Markdown
+  Tracks, documents, and categorizes every code change and commit in SubstackAtelier
   into unified .agents/issues/ and .agents/plans/ markdown documents, updating the
   central ticket registry in .agents/README.md. Use this skill whenever planning,
   implementing, or committing new features, fixes, or refactors.
@@ -9,7 +9,7 @@ description: >-
 
 # Commit & Ticket Tracking Procedure
 
-This skill establishes the standard workflow for tracking every code change in the `Substack2Markdown` repository into `.agents/plans/` or `.agents/issues/` and maintaining the unified ticket index at `.agents/README.md`.
+This skill establishes the standard workflow for tracking every code change in the `SubstackAtelier` repository into `.agents/plans/` or `.agents/issues/` and maintaining the unified ticket index at `.agents/README.md`.
 
 ---
 

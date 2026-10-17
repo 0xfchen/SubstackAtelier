@@ -1,4 +1,4 @@
-# Substack2Markdown Reader
+# SubstackAtelier Reader
 
 Local static reader for scraped Substack essays, based on [Astro Tone](https://github.com/hanityx/astro-tone).
 

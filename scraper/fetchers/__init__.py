@@ -1,4 +1,4 @@
-"""Substack2Markdown fetchers package.
+"""SubstackAtelier fetchers package.
 
 Provides page fetcher implementations conforming to the PageFetcher protocol.
 """

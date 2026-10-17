@@ -2,7 +2,7 @@
 
 ## Goal
 
-Migrate `Substack2Markdown` from Selenium to Playwright to:
+Migrate `SubstackAtelier` from Selenium to Playwright to:
 1. **Eliminate WebDrivers completely**: No `chromedriver`, `msedgedriver`, or driver version mismatch issues.
 2. **Zero Extra Browser Downloads**: Use the already-installed system Google Chrome or Microsoft Edge directly via Playwright browser channels (`channel="chrome"`, `channel="msedge"`). Do NOT download or install Playwright's bundled Chromium if Chrome/Edge is present on the computer.
 3. **Seamless Session Reuse**: Re-use your authenticated Substack session (cookies, localStorage, and tokens) so you don't have to manually log in repeatedly or deal with recurring CAPTCHAs.

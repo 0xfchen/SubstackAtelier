@@ -8,7 +8,7 @@ Switch the default frontmatter format from `legacy` to `mdx` across all scrapers
 
 ## Background & Rationale
 
-Substack2Markdown supported two frontmatter formats:
+SubstackAtelier supported two frontmatter formats:
 - `legacy`: Custom text headers with markdown bold labels (e.g. `# Title`, `**Author:** ...`, `**Likes:** ...`).
 - `mdx`: Standard YAML frontmatter enclosed in `---` blocks with structured metadata (`title`, `subtitle`, `date`, `author`, `source_url`).
 

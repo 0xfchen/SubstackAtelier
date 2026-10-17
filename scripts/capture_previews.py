@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture high-resolution preview screenshots for the Substack2Markdown documentation.
+"""Capture high-resolution preview screenshots for the SubstackAtelier documentation.
 
 This script connects to the local Astro reader dev server and uses Playwright
 to generate crisp 2x Retina screenshots of the reader interfaces:

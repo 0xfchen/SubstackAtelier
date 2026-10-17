@@ -1,4 +1,4 @@
-# Substack2Markdown - Tickets & Plans Index
+# SubstackAtelier - Tickets & Plans Index
 
 Unified, chronological index of all retroactively created issues and plans mapped to commit history.
 

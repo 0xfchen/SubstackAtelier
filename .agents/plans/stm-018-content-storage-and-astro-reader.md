@@ -109,7 +109,7 @@ Rather than maintaining a custom Markdown-to-HTML compilation pipeline, CSS styl
 
 #### Monorepo Architecture
 ```
-Substack2Markdown/
+SubstackAtelier/
 ├── substack_scraper/          # Python scraper CLI
 ├── content/                   # Author-centric content archive
 │   └── <author>/

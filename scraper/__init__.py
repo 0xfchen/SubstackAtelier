@@ -1,4 +1,4 @@
-"""Substack2Markdown package.
+"""SubstackAtelier package.
 
 Provides tools to scrape and archive Substack newsletters into structured Markdown format.
 """

@@ -2,7 +2,7 @@
 
 ## Goal
 
-1. **Primary Goal**: Migrate the Substack2Markdown conversion pipeline from the legacy, unmaintained `html2text` library to [`html-to-markdown`](https://github.com/xberg-io/html-to-markdown) (maintained by the Kreuzberg team, powered by a high-performance Rust core) to eliminate markdownlint violations, enhance table fidelity, and fix whitespace truncation around links.
+1. **Primary Goal**: Migrate the SubstackAtelier conversion pipeline from the legacy, unmaintained `html2text` library to [`html-to-markdown`](https://github.com/xberg-io/html-to-markdown) (maintained by the Kreuzberg team, powered by a high-performance Rust core) to eliminate markdownlint violations, enhance table fidelity, and fix whitespace truncation around links.
 2. **Secondary Goals**:
    - **Performance & Modern Typing**: Leverage Rust-backed PyO3 parsing throughput (19x–30x faster) with full PEP 585 / PEP 604 type safety and clean AST-based CommonMark & GFM compliance.
    - **Syntax Highlighting Out of the Box**: Preserve syntax highlighting language fences from both `<pre class="language-*">` and `<code class="language-*">` natively without fragile `HTML2Text` monkeypatching.
