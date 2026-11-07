@@ -56,6 +56,7 @@ Unified, chronological index of all retroactively created issues and plans mappe
 | **`stm-048`** | **Issue** | `refactor` | Replace Free/Premium Scraper Inheritance with Injectable Page Fetchers | [`issues/stm-048-injectable-page-fetchers.md`](issues/stm-048-injectable-page-fetchers.md) |
 | **`stm-049`** | **Issue** | `refactor` | Trim Scraper Package Exports and Remove Dead Catalog Module | [`issues/stm-049-trim-package-exports.md`](issues/stm-049-trim-package-exports.md) |
 | **`stm-050`** | **Issue** | `refactor` | Split Monolithic `test_scraper.py` into Per-Module Test Files | [`issues/stm-050-split-test-suite.md`](issues/stm-050-split-test-suite.md) |
+| **`stm-051`** | **Issue** | `fix` | Update Incremental Sync for Substack Cursor Pagination | [`issues/stm-051-update-substack-sync-api-pagination.md`](issues/stm-051-update-substack-sync-api-pagination.md) |
 
 ---
 

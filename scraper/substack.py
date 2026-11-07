@@ -311,32 +311,53 @@ class SubstackScraper:
         logger.info("Found %d new post(s) to sync.", len(delta_posts))
 
         new_entries: list[dict[str, Any]] = []
+        last_contiguous_post: dict[str, Any] | None = None
+        first_failed_post_url: str | None = None
+        first_failed_post_slug: str | None = None
+
         with tqdm(total=len(delta_posts), desc="Syncing delta posts") as progress_bar:
             for post in reversed(delta_posts):
+                post_slug = post.get("slug")
                 post_url = post.get("canonical_url")
                 if not post_url:
-                    slug = post.get("slug")
-                    post_url = f"{self.base_substack_url}p/{slug}"
+                    post_url = f"{self.base_substack_url}p/{post_slug}"
 
+                entry: dict[str, Any] | None = None
                 try:
                     entry = self._scrape_single_post(post_url, progress_bar=progress_bar)
-                    if entry is not None:
-                        new_entries.append(entry)
                 except Exception as error:
                     progress_bar.write(f"Error syncing post {post_url}: {error}")
+
+                if entry is not None:
+                    new_entries.append(entry)
+                    if first_failed_post_url is None:
+                        last_contiguous_post = post
+                elif first_failed_post_url is None:
+                    first_failed_post_url = post_url
+                    first_failed_post_slug = post_slug
+
                 progress_bar.update(1)
 
         if new_entries:
             save_posts_data_to_json(self.metadata_file_path, posts_data=new_entries)
-            newest_post = delta_posts[0]
-            cursor["last_sync_at"] = datetime.now(UTC).isoformat()
-            cursor["last_post_date"] = newest_post.get("post_date") or cursor.get("last_post_date")
-            if newest_post.get("id"):
-                cursor["last_post_id"] = newest_post["id"]
-            if newest_post.get("slug"):
-                cursor["last_post_slug"] = newest_post["slug"]
-            cursor["total_synced_posts"] = cursor.get("total_synced_posts", 0) + len(new_entries)
-            save_sync_state(self.author_dir, cursor)
+
+        if first_failed_post_url is not None:
+            logger.warning(
+                "Sync position held back by failed post %s (%s); will retry on next sync.",
+                first_failed_post_slug or first_failed_post_url,
+                first_failed_post_url,
+            )
+
+        if last_contiguous_post is not None:
+            cursor["last_post_date"] = last_contiguous_post.get("post_date") or cursor.get("last_post_date")
+            if last_contiguous_post.get("id"):
+                cursor["last_post_id"] = last_contiguous_post["id"]
+            if last_contiguous_post.get("slug"):
+                cursor["last_post_slug"] = last_contiguous_post["slug"]
+
+        cursor["last_sync_at"] = datetime.now(UTC).isoformat()
+        cursor["total_synced_posts"] = cursor.get("total_synced_posts", 0) + len(new_entries)
+        save_sync_state(self.author_dir, cursor)
 
         logger.info("Sync completed: %d post(s) synced successfully.", len(new_entries))
         return len(new_entries)

@@ -234,6 +234,231 @@ def test_sync_posts_scrapes_delta_and_updates_cursor(tmp_path, monkeypatch):
         "https://example.substack.com/p/newest-post",
     ]
 
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
+    assert updated_cursor is not None
+    assert updated_cursor["last_post_id"] == 200
+    assert updated_cursor["last_post_slug"] == "newest-post"
+    assert updated_cursor["last_post_date"] == "2026-09-25T15:00:00.000Z"
+    assert updated_cursor["total_synced_posts"] == 12
+
+
+def test_sync_posts_falls_back_to_sitemap_when_api_returns_none(tmp_path, monkeypatch):
+    """Verify sync_posts falls back to sitemap discovery and does not advance cursor to API post when API returns None."""
+    scraper = FakeScraper(
+        "https://example.substack.com",
+        content_save_dir=str(tmp_path),
+        post_urls=["https://example.substack.com/p/sitemap-post"],
+    )
+    initial_cursor = {
+        "last_sync_at": "2026-09-20T00:00:00Z",
+        "last_post_date": "2026-09-20T10:00:00.000Z",
+        "last_post_id": 100,
+        "last_post_slug": "post-100",
+        "total_synced_posts": 10,
+    }
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
+
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=None))
+    scrape_posts_mock = Mock()
+    monkeypatch.setattr(scraper, "scrape_posts", scrape_posts_mock)
+
+    result_count = scraper.sync_posts()
+
+    assert result_count == 1
+    scrape_posts_mock.assert_called_once_with(limit=0)
+    saved_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
+    assert saved_cursor == initial_cursor
+
+
+@pytest.mark.parametrize("failure_mode", ["raises_exception", "returns_none"])
+def test_sync_posts_middle_delta_post_failure_holds_back_cursor(tmp_path, monkeypatch, caplog, failure_mode):
+    """Verify middle delta post failure advances cursor only to last post before failure while saving all successes."""
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
+    initial_cursor = {
+        "last_sync_at": "2026-09-20T00:00:00Z",
+        "last_post_date": "2026-09-20T10:00:00.000Z",
+        "last_post_id": 100,
+        "last_post_slug": "post-100",
+        "total_synced_posts": 10,
+    }
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
+
+    delta_api_posts = [
+        {
+            "id": 200,
+            "slug": "newest-post",
+            "post_date": "2026-09-25T15:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/newest-post",
+        },
+        {
+            "id": 150,
+            "slug": "middle-post",
+            "post_date": "2026-09-22T12:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/middle-post",
+        },
+        {
+            "id": 110,
+            "slug": "oldest-post",
+            "post_date": "2026-09-21T10:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/oldest-post",
+        },
+    ]
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=delta_api_posts))
+
+    def fake_scrape_single(url, progress_bar=None):
+        slug = url.split("/")[-1]
+        if slug == "middle-post":
+            if failure_mode == "raises_exception":
+                raise RuntimeError("Transient network error")
+            return None
+        return {
+            "title": f"Title {slug}",
+            "slug": slug,
+            "post_id": 200 if slug == "newest-post" else 110,
+            "date": "2026-09-25" if slug == "newest-post" else "2026-09-21",
+        }
+
+    scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
+
+    with caplog.at_level(logging.WARNING):
+        synced_count = scraper.sync_posts()
+
+    assert synced_count == 2
+
+    with open(scraper.metadata_file_path, encoding="utf-8") as metadata_file:
+        saved_metadata = json.load(metadata_file)
+    assert {entry["slug"] for entry in saved_metadata} == {"oldest-post", "newest-post"}
+
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
+    assert updated_cursor is not None
+    assert updated_cursor["last_post_id"] == 110
+    assert updated_cursor["last_post_slug"] == "oldest-post"
+    assert updated_cursor["last_post_date"] == "2026-09-21T10:00:00.000Z"
+    assert updated_cursor["total_synced_posts"] == 12
+    assert any("middle-post" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("failure_mode", ["raises_exception", "returns_none"])
+def test_sync_posts_oldest_delta_post_failure_leaves_position_unchanged(tmp_path, monkeypatch, caplog, failure_mode):
+    """Verify failure on the oldest delta post leaves sync position fields unchanged."""
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
+    initial_cursor = {
+        "last_sync_at": "2026-09-20T00:00:00Z",
+        "last_post_date": "2026-09-20T10:00:00.000Z",
+        "last_post_id": 100,
+        "last_post_slug": "post-100",
+        "total_synced_posts": 10,
+    }
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
+
+    delta_api_posts = [
+        {
+            "id": 200,
+            "slug": "newest-post",
+            "post_date": "2026-09-25T15:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/newest-post",
+        },
+        {
+            "id": 110,
+            "slug": "oldest-post",
+            "post_date": "2026-09-21T10:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/oldest-post",
+        },
+    ]
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=delta_api_posts))
+
+    def fake_scrape_single(url, progress_bar=None):
+        slug = url.split("/")[-1]
+        if slug == "oldest-post":
+            if failure_mode == "raises_exception":
+                raise RuntimeError("Extraction crash")
+            return None
+        return {
+            "title": f"Title {slug}",
+            "slug": slug,
+            "post_id": 200,
+            "date": "2026-09-25",
+        }
+
+    scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
+
+    with caplog.at_level(logging.WARNING):
+        synced_count = scraper.sync_posts()
+
+    assert synced_count == 1
+
+    with open(scraper.metadata_file_path, encoding="utf-8") as metadata_file:
+        saved_metadata = json.load(metadata_file)
+    assert [entry["slug"] for entry in saved_metadata] == ["newest-post"]
+
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
+    assert updated_cursor is not None
+    assert updated_cursor["last_post_id"] == 100
+    assert updated_cursor["last_post_slug"] == "post-100"
+    assert updated_cursor["last_post_date"] == "2026-09-20T10:00:00.000Z"
+    assert updated_cursor["total_synced_posts"] == 11
+    assert updated_cursor["last_sync_at"] != "2026-09-20T00:00:00Z"
+    assert any("oldest-post" in record.message for record in caplog.records)
+
+
+def test_sync_posts_already_archived_delta_post_counts_as_success(tmp_path, monkeypatch, caplog):
+    """Verify an already-archived delta post on disk counts as a success and does not hold back sync position."""
+    scraper = FakeScraper(
+        "https://example.substack.com",
+        content_save_dir=str(tmp_path),
+        overwrite=False,
+    )
+    initial_cursor = {
+        "last_sync_at": "2026-09-20T00:00:00Z",
+        "last_post_date": "2026-09-20T10:00:00.000Z",
+        "last_post_id": 100,
+        "last_post_slug": "post-100",
+        "total_synced_posts": 10,
+    }
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
+
+    # Pre-create the older delta post on disk
+    existing_markdown_path = tmp_path / "example" / "posts" / "already-saved.md"
+    existing_markdown_path.write_text(
+        '---\ntitle: "Already Saved"\npost_id: 150\ndate: "2026-09-22"\nauthor: "Author"\n---\n\nExisting body',
+        encoding="utf-8",
+    )
+
+    delta_api_posts = [
+        {
+            "id": 200,
+            "slug": "brand-new",
+            "post_date": "2026-09-25T15:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/brand-new",
+        },
+        {
+            "id": 150,
+            "slug": "already-saved",
+            "post_date": "2026-09-22T12:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/already-saved",
+        },
+    ]
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=delta_api_posts))
+
+    valid_soup = BeautifulSoup(
+        "<html><body><h1 class='post-title'>Brand New</h1><div class='available-content'><p>Body</p></div></body></html>",
+        "html.parser",
+    )
+    scraper.fetcher.fetch_soup = Mock(return_value=valid_soup)
+
+    with caplog.at_level(logging.WARNING):
+        synced_count = scraper.sync_posts()
+
+    assert synced_count == 2
+    scraper.fetcher.fetch_soup.assert_called_once_with("https://example.substack.com/p/brand-new")
+
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
+    assert updated_cursor is not None
+    assert updated_cursor["last_post_id"] == 200
+    assert updated_cursor["last_post_slug"] == "brand-new"
+    assert updated_cursor["last_post_date"] == "2026-09-25T15:00:00.000Z"
+    assert not any("held back" in record.message for record in caplog.records)
+
 
 def test_scrape_single_post_dumps_debug_html_on_extraction_failure(tmp_path):
     """Verify _scrape_single_post dumps debug HTML when extraction fails."""

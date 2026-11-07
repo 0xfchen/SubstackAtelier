@@ -82,13 +82,19 @@ class FakeResponse:
         content: bytes = b"",
         ok: bool = True,
         status_code: int = 200,
+        params: dict[str, Any] | None = None,
+        json_error: Exception | None = None,
     ) -> None:
-        self._json_data = json_data if json_data is not None else []
+        self._json_data = json_data
         self.content = content
         self.ok = ok
         self.status_code = status_code
+        self.params = params
+        self._json_error = json_error
 
     def json(self) -> Any:
+        if self._json_error is not None:
+            raise self._json_error
         return self._json_data
 
 

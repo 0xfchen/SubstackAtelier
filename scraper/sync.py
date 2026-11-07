@@ -9,12 +9,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 import requests
+from bs4 import BeautifulSoup
 
 from scraper.config import (
     DEFAULT_API_POST_LIMIT,
     DEFAULT_REQUEST_TIMEOUT,
     MAX_API_SYNC_PAGES,
 )
+from scraper.fetchers.rate_limit import handle_rate_limit, is_rate_limited
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +142,93 @@ def save_sync_state(author_dir: str, state: dict[str, Any]) -> None:
     os.replace(temporary_path, sync_state_path)
 
 
+def _request_api_page(
+    api_base_url: str,
+    request_params: dict[str, Any],
+    max_attempts: int = 5,
+) -> Any | None:
+    """Request a single Substack API page with HTTP 429 backoff retry and JSON decoding."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(
+                api_base_url,
+                params=request_params,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as request_error:
+            logger.warning("Error requesting Substack API %s: %s", api_base_url, request_error)
+            return None
+
+        response_soup = BeautifulSoup(response.content, "html.parser") if response.content else None
+        if response.status_code == 429 and not is_rate_limited(response_soup):
+            response_soup = BeautifulSoup("<pre>Too Many Requests</pre>", "html.parser")
+
+        try:
+            if handle_rate_limit(response_soup, attempt, max_attempts, api_base_url):
+                continue
+        except RuntimeError as rate_limit_error:
+            logger.warning("Rate limit exceeded for Substack API %s: %s", api_base_url, rate_limit_error)
+            return None
+
+        if not response.ok:
+            logger.warning(
+                "Substack API returned status %s for %s",
+                response.status_code,
+                api_base_url,
+            )
+            return None
+
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, ValueError) as json_error:
+            logger.warning("Failed to decode JSON from Substack API %s: %s", api_base_url, json_error)
+            return None
+
+        if payload is None:
+            logger.warning("Unexpected null JSON payload from Substack API %s", api_base_url)
+            return None
+        return payload
+
+    return None
+
+
+def _parse_api_page_payload(
+    payload: Any,
+    api_base_url: str,
+) -> tuple[list[Any], str | None] | None:
+    """Extract the posts list and next cursor from an API page payload, or return None if malformed."""
+    if isinstance(payload, list):
+        return payload, None
+
+    if not isinstance(payload, dict):
+        logger.warning(
+            "Malformed Substack API response from %s: expected dict or list, got %s",
+            api_base_url,
+            type(payload).__name__,
+        )
+        return None
+
+    page_posts = payload.get("posts")
+    if not isinstance(page_posts, list):
+        logger.warning(
+            "Malformed Substack API response from %s: missing or non-list 'posts' field",
+            api_base_url,
+        )
+        return None
+
+    raw_next_cursor = payload.get("nextCursor")
+    if raw_next_cursor is not None and not isinstance(raw_next_cursor, str):
+        logger.warning(
+            "Malformed Substack API response from %s: invalid 'nextCursor' type %s",
+            api_base_url,
+            type(raw_next_cursor).__name__,
+        )
+        return None
+
+    next_cursor = raw_next_cursor if raw_next_cursor else None
+    return page_posts, next_cursor
+
+
 def fetch_posts_from_api(
     publication_url: str,
     since_date: str | None = None,
@@ -167,33 +256,35 @@ def fetch_posts_from_api(
     delta_posts: list[dict[str, Any]] = []
     since_datetime = _parse_iso_datetime(since_date) if since_date else None
     is_date_only = bool(since_date and len(since_date.strip()) == 10)
+    has_cutoff_criteria = bool(since_date or last_post_id is not None or last_post_slug is not None)
 
     api_base_url = f"{publication_url}api/v1/posts"
-    offset = 0
+    current_cursor: str | None = None
 
     for _ in range(max_pages):
-        api_page_url = f"{api_base_url}?offset={offset}&limit={limit}&sort=new"
-        try:
-            response = requests.get(api_page_url, timeout=DEFAULT_REQUEST_TIMEOUT)
-        except requests.RequestException as request_error:
-            logger.warning("Error requesting Substack API %s: %s", api_page_url, request_error)
-            return None if offset == 0 else delta_posts
+        request_params: dict[str, Any] = {"limit": limit, "sort": "new"}
+        if current_cursor is not None:
+            request_params["cursor"] = current_cursor
 
-        if not response.ok:
-            logger.warning("Substack API returned status %s for %s", response.status_code, api_page_url)
-            return None if offset == 0 else delta_posts
+        payload = _request_api_page(api_base_url, request_params)
+        if payload is None:
+            return None
 
-        try:
-            api_posts = response.json()
-        except (json.JSONDecodeError, ValueError) as json_error:
-            logger.warning("Failed to decode JSON from Substack API %s: %s", api_page_url, json_error)
-            return None if offset == 0 else delta_posts
+        parsed_page = _parse_api_page_payload(payload, api_base_url)
+        if parsed_page is None:
+            return None
 
-        if not isinstance(api_posts, list) or not api_posts:
-            break
+        page_posts, next_cursor = parsed_page
 
-        stopped = False
-        for post in api_posts:
+        if not page_posts and next_cursor is not None:
+            logger.warning(
+                "Substack API returned an empty posts page with non-empty nextCursor %r for %s",
+                next_cursor,
+                api_base_url,
+            )
+            return None
+
+        for post in page_posts:
             if not isinstance(post, dict):
                 continue
 
@@ -204,14 +295,31 @@ def fetch_posts_from_api(
                 since_datetime=since_datetime,
                 is_date_only=is_date_only,
             ):
-                stopped = True
-                break
+                return delta_posts
 
             delta_posts.append(post)
 
-        if stopped or len(api_posts) < limit:
-            break
+        if next_cursor is None:
+            if has_cutoff_criteria:
+                logger.warning(
+                    "Substack API pagination reached end of archive before matching sync cutoff for %s",
+                    api_base_url,
+                )
+            return delta_posts
 
-        offset += limit
+        if next_cursor == current_cursor:
+            logger.warning(
+                "Substack API returned repeated nextCursor %r for %s; aborting stuck pagination",
+                next_cursor,
+                api_base_url,
+            )
+            return None
 
-    return delta_posts
+        current_cursor = next_cursor
+
+    logger.warning(
+        "Substack API pagination exhausted max_pages (%d) before reaching sync cutoff for %s",
+        max_pages,
+        api_base_url,
+    )
+    return None
