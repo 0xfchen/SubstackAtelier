@@ -13,7 +13,12 @@ from playwright.sync_api import (
     Error as PlaywrightError,
 )
 
+from scraper import config as _config
+from scraper.config import BROWSER_PROFILES_DIR, DEFAULT_STORAGE_STATE_PATH
+
 logger = logging.getLogger(__name__)
+
+_INITIAL_BROWSER_PROFILES_DIR: str = BROWSER_PROFILES_DIR
 
 
 @dataclass
@@ -45,7 +50,23 @@ class BrowserManager:
     """Manage browser launching, fallback selection, and session persistence via Playwright."""
 
     SUPPORTED_BROWSERS: list[str] = ["chrome", "edge"]
-    DEFAULT_STORAGE_STATE_PATH: str = os.path.join(os.path.expanduser("~"), ".substack_scraper", "storage_state.json")
+    DEFAULT_STORAGE_STATE_PATH: str = DEFAULT_STORAGE_STATE_PATH
+
+    @staticmethod
+    def _log_legacy_session_notice(new_target_path: str) -> None:
+        """Log a migration notice if ~/.substack_scraper exists and the new target path does not."""
+        legacy_dir = os.path.join(os.path.expanduser("~"), ".substack_scraper")
+        if os.path.exists(legacy_dir) and not os.path.exists(new_target_path):
+            logger.info(
+                "Legacy session directory found at %s while %s is missing. "
+                "To migrate existing session data manually, run:\n"
+                "  mv ~/.substack_scraper/storage_state.json content/storage_state.json\n"
+                "  mkdir -p content/.browser_profiles\n"
+                "  mv ~/.substack_scraper/chrome_profile content/.browser_profiles/chrome\n"
+                "  mv ~/.substack_scraper/edge_profile content/.browser_profiles/edge",
+                legacy_dir,
+                new_target_path,
+            )
 
     @staticmethod
     def get_user_data_dir(browser: str) -> str:
@@ -57,9 +78,19 @@ class BrowserManager:
         Returns:
             str: Directory path for the browser's persistent user profile.
         """
-        base_dir = os.path.join(os.path.expanduser("~"), ".substack_scraper")
-        os.makedirs(base_dir, exist_ok=True)
-        return os.path.join(base_dir, f"{browser}_profile")
+        profiles_dir = (
+            BROWSER_PROFILES_DIR
+            if BROWSER_PROFILES_DIR != _INITIAL_BROWSER_PROFILES_DIR
+            else _config.BROWSER_PROFILES_DIR
+        )
+        os.makedirs(profiles_dir, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(profiles_dir, 0o700)
+        except OSError:
+            pass
+        profile_dir = os.path.join(profiles_dir, browser)
+        BrowserManager._log_legacy_session_notice(profile_dir)
+        return profile_dir
 
     @classmethod
     def resolve_channel(cls, requested_browser: str, playwright: Playwright) -> str | None:
@@ -177,10 +208,10 @@ class BrowserManager:
             if user_agent:
                 context_kwargs["user_agent"] = user_agent
 
-            effective_storage = storage_state or (
-                cls.DEFAULT_STORAGE_STATE_PATH if os.path.exists(cls.DEFAULT_STORAGE_STATE_PATH) else ""
-            )
-            if effective_storage and os.path.exists(effective_storage):
+            target_storage_path = storage_state or cls.DEFAULT_STORAGE_STATE_PATH
+            cls._log_legacy_session_notice(target_storage_path)
+            effective_storage = target_storage_path if os.path.exists(target_storage_path) else ""
+            if effective_storage:
                 logger.info("Loading session from storage state: %s", effective_storage)
                 context_kwargs["storage_state"] = effective_storage
 

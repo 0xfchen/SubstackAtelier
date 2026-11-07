@@ -106,8 +106,10 @@ uv run scraper --url https://example.substack.com --premium --browser chrome
 
 #### Reusing Existing Sessions (No Repeated Logins)
 
+Reused sessions (persistent profiles, storage state files, and CDP connections) are verified for an active Substack session cookie before scraping begins.
+
 **Option 1: Persistent Profile (Recommended)**
-Saves your logged-in state to `~/.substack_scraper/<browser>_profile`:
+Saves your logged-in state to `content/.browser_profiles/<browser>/`:
 ```bash
 # First run: logs in or solve CAPTCHA interactively once
 uv run scraper --url https://example.substack.com --premium --persistent-profile
@@ -117,13 +119,21 @@ uv run scraper --url https://example.substack.com --premium --persistent-profile
 ```
 
 **Option 2: Storage State JSON**
-Playwright automatically exports auth tokens and cookies to `~/.substack_scraper/storage_state.json` upon successful login:
+Playwright automatically exports auth tokens and cookies to `content/storage_state.json` upon confirmed login:
 ```bash
 # Run headlessly reusing saved cookies
 uv run scraper --url https://example.substack.com --premium --headless --skip-login
 # Or specify a custom state file:
 uv run scraper --url https://example.substack.com --premium --storage-state path/to/state.json
 ```
+
+> **Migrating from `~/.substack_scraper/`**: Session data is now stored under `content/`. To migrate an existing session manually:
+> ```bash
+> mv ~/.substack_scraper/storage_state.json content/storage_state.json
+> mkdir -p content/.browser_profiles
+> mv ~/.substack_scraper/chrome_profile content/.browser_profiles/chrome
+> mv ~/.substack_scraper/edge_profile content/.browser_profiles/edge
+> ```
 
 **Option 3: Attach Directly to Active Browser (CDP)**
 Connect directly to an already-open personal Chrome/Edge window without logging in again:

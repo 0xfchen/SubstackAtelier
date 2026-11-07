@@ -7,7 +7,7 @@ name = "SubstackAtelier"
 version = "0.1.0"
 description = "Scrape and archive Substack newsletters into Markdown and HTML formats."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.15"
 license = "MIT"
 authors = [
     { name = "Tim Farrelly" },
@@ -50,7 +50,7 @@ pythonpath = ["."]
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]

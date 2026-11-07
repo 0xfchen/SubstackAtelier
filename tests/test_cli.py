@@ -224,6 +224,7 @@ def test_cli_builds_playwright_fetcher_with_premium(monkeypatch):
     args = parse_args()
 
     mock_session = MagicMock()
+    mock_session.context.cookies.return_value = [{"name": "substack.sid", "value": "valid-session"}]
     monkeypatch.setattr("scraper.fetchers.playwright.BrowserManager.launch", lambda **kwargs: mock_session)
     fetcher = _build_page_fetcher(args)
     assert isinstance(fetcher, PlaywrightFetcher)

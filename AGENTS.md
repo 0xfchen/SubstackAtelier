@@ -4,7 +4,7 @@
 SubstackAtelier is a modular Python package designed to scrape and archive Substack newsletters (both free and premium subscriber-only content) into Markdown and HTML formats. It also provides a local Astro reader interface with full-text search and downloads images locally when requested.
 
 ## Tech Stack & Architecture
-- **Language & Standards**: Python 3.11+, PEP 8, PEP 585 (built-in generics), PEP 604 (union syntax `|`)
+- **Language & Standards**: Python 3.15+, PEP 8, PEP 585 (built-in generics), PEP 604 (union syntax `|`)
 - **HTTP & Parsing**: `requests`, `BeautifulSoup` (bs4), `html-to-markdown` (Rust core), `mdformat`, `python-dotenv`
 - **Automation / Headless Browser**: `playwright` (native Chrome and Edge channels, persistent sessions, CDP)
 - **Testing**: `pytest`
@@ -96,7 +96,7 @@ flowchart LR
     ftch --> brw
 ```
 
-- [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), `EXCLUDED_URL_KEYWORDS`, timeouts, and `get_credentials()` which loads from `.env` or environment variables.
+- [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), session state paths (`DEFAULT_STORAGE_STATE_PATH`, `BROWSER_PROFILES_DIR`), `SUBSTACK_SESSION_COOKIE_NAME`, `EXCLUDED_URL_KEYWORDS`, timeouts, and `get_credentials()` which loads from `.env` or environment variables.
 - [`scraper/url_utils.py`](scraper/url_utils.py): URL validation, publication URL extraction, `get_slug_from_url()`, and `extract_main_part()` supporting custom Substack domains (e.g. `blog.bytebytego.com`, `newsletter.pragmaticengineer.com`).
 - [`scraper/discovery.py`](scraper/discovery.py): Publication URL discovery via sitemap and RSS feed crawling (`discover_post_urls`) with keyword filtering.
 - [`scraper/extract.py`](scraper/extract.py): Substack DOM extraction, ld+json parsing, promotional widget cleaning, YouTube embed transformations, and post HTML-to-Markdown conversion (`extract_post_data`, `post_html_to_markdown`).
@@ -106,7 +106,7 @@ flowchart LR
 - [`scraper/__init__.py`](scraper/__init__.py): Exposes clean public API (`SubstackScraper`, `PageFetcher`, `RequestsFetcher`, `PlaywrightFetcher`, `BrowserManager`, `convert_html_to_markdown`, `get_credentials`, `BASE_CONTENT_DIR`, `main`, `parse_args`).
 - [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, missing image alt normalization, and `normalize_markdown()`.
 - [`scraper/images.py`](scraper/images.py): Image URL resolution, filename sanitization, linked image cleanup, and parallel downloads into `content/<author>/images/<slug>/` via `ThreadPoolExecutor`.
-- [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles, and CDP attach.
+- [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles under `content/.browser_profiles/<browser>/`, session state at `content/storage_state.json`, and CDP attach.
 - [`scraper/fetchers/base.py`](scraper/fetchers/base.py): `PageFetcher` protocol (`fetch_soup`, `close`).
 - [`scraper/fetchers/rate_limit.py`](scraper/fetchers/rate_limit.py): Jittered exponential backoff and HTTP 429 rate limit detection (`is_rate_limited`, `compute_backoff_delay`, `handle_rate_limit`).
 - [`scraper/fetchers/http.py`](scraper/fetchers/http.py): `RequestsFetcher` for free / public Substack posts via `requests` and `BeautifulSoup`.

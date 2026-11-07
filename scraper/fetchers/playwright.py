@@ -15,6 +15,7 @@ from scraper.config import (
     PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS,
     PLAYWRIGHT_NAVIGATION_TIMEOUT_MS,
     PLAYWRIGHT_SELECTOR_TIMEOUT_MS,
+    SUBSTACK_SESSION_COOKIE_NAME,
     get_credentials,
 )
 from scraper.fetchers.rate_limit import handle_rate_limit
@@ -54,23 +55,12 @@ class PlaywrightFetcher:
             ValueError: If credentials are missing when login is required.
         """
         self.email, self.password = get_credentials()
-        profile_dir = BrowserManager.get_user_data_dir(browser)
-        has_persistent_profile = use_persistent_profile and os.path.exists(profile_dir)
-        has_storage = bool(
-            storage_state
-            or (
-                os.path.exists(BrowserManager.DEFAULT_STORAGE_STATE_PATH)
-                and os.path.getsize(BrowserManager.DEFAULT_STORAGE_STATE_PATH) > 0
-            )
-        )
-        has_reusable_session = skip_login or has_persistent_profile or has_storage or bool(cdp_url)
+        has_explicit_session_reuse = skip_login or bool(storage_state) or bool(cdp_url)
 
         if not (self.email and self.password):
-            if has_reusable_session:
+            if has_explicit_session_reuse:
                 skip_login = True
-                logger.info(
-                    "Substack credentials not provided; automatically reusing existing persistent profile or storage state with skip_login=True."
-                )
+                logger.info("Substack credentials not provided; reusing explicit session option with skip_login=True.")
             else:
                 raise ValueError(
                     "Premium scraping requires credentials. Set the SUBSTACK_EMAIL "
@@ -99,22 +89,49 @@ class PlaywrightFetcher:
             self.use_persistent_profile = use_persistent_profile
             self.storage_state = storage_state or BrowserManager.DEFAULT_STORAGE_STATE_PATH
 
-            if not skip_login and not cdp_url:
+            if not skip_login and not storage_state and not cdp_url:
                 self._login()
             else:
                 logger.info("Skipping login (using existing profile or active browser session)")
                 if start_url:
                     self.page.goto(start_url, wait_until="domcontentloaded")
                     sleep(2)
+                if not self._is_authenticated():
+                    raise RuntimeError(
+                        "Reused browser session (persistent profile, storage state, or CDP) is not authenticated. "
+                        "Rerun with SUBSTACK_EMAIL and SUBSTACK_PASSWORD credentials, or run without --headless "
+                        "and with --persistent-profile to complete login interactively."
+                    )
         except BaseException:
             self.close()
             raise
 
+    def _is_authenticated(self) -> bool:
+        """Check whether the browser context contains a Substack session cookie."""
+        try:
+            cookies = self.context.cookies()
+        except PlaywrightError as exc:
+            logger.debug("Could not read browser cookies for auth verification: %s", exc)
+            return False
+
+        return any(
+            isinstance(cookie, dict)
+            and cookie.get("name") == SUBSTACK_SESSION_COOKIE_NAME
+            and bool(cookie.get("value", "present"))
+            for cookie in cookies
+        )
+
     def _save_session_state(self) -> None:
         """Persist session cookies and localStorage to storage_state.json."""
         try:
-            os.makedirs(os.path.dirname(self.storage_state), exist_ok=True)
+            storage_dir = os.path.dirname(self.storage_state)
+            if storage_dir:
+                os.makedirs(storage_dir, exist_ok=True)
             self.context.storage_state(path=self.storage_state)
+            try:
+                os.chmod(self.storage_state, 0o600)
+            except OSError:
+                pass
             logger.info("Session state saved to %s", self.storage_state)
         except (OSError, PlaywrightError) as exc:
             logger.warning("Could not save storage state to %s: %s", self.storage_state, exc)
@@ -126,7 +143,7 @@ class PlaywrightFetcher:
         sleep(2)
 
         # If session is already authenticated, Substack immediately redirects away from /sign-in
-        if "sign-in" not in self.page.url:
+        if "sign-in" not in self.page.url and self._is_authenticated():
             logger.info(
                 "Session already authenticated (redirected to %s). Skipping login form.",
                 self.page.url,
@@ -168,9 +185,15 @@ class PlaywrightFetcher:
                     "  2. Use --persistent-profile to save your session\n"
                     "  3. Then run with --skip-login on subsequent runs"
                 )
-            # Check if navigated away from sign-in
-            if "sign-in" not in self.page.url:
+            # Check if navigated away from sign-in with confirmed session cookie
+            if "sign-in" not in self.page.url and self._is_authenticated():
                 break
+
+        if "sign-in" in self.page.url or not self._is_authenticated():
+            raise RuntimeError(
+                "Login was not confirmed; the browser session does not have an authenticated Substack cookie. "
+                "Complete any CAPTCHA or verification prompt, then retry."
+            )
 
         logger.info("Login successful!")
         self._save_session_state()
