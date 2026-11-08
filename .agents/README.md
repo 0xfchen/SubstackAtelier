@@ -59,6 +59,7 @@ Unified, chronological index of all retroactively created issues and plans mappe
 | **`stm-051`** | **Issue** | `fix` | Update Incremental Sync for Substack Cursor Pagination | [`issues/stm-051-update-substack-sync-api-pagination.md`](issues/stm-051-update-substack-sync-api-pagination.md) |
 | **`stm-052`** | **Issue** | `fix` | Detect Unconfirmed Premium Login | [`issues/stm-052-detect-unconfirmed-premium-login.md`](issues/stm-052-detect-unconfirmed-premium-login.md) |
 | **`stm-053`** | **Issue** | `fix` | Handle Plain-Text Rate Limits and Preserve Scrape Progress | [`issues/stm-053-handle-plain-text-rate-limits.md`](issues/stm-053-handle-plain-text-rate-limits.md) |
+| **`stm-054`** | **Issue** | `fix` | Fix Substack Image Placeholder Links and Heading SVG Labels | [`issues/stm-054-fix-substack-image-placeholder-links.md`](issues/stm-054-fix-substack-image-placeholder-links.md) |
 
 ---
 

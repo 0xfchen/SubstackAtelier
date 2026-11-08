@@ -173,6 +173,8 @@ def _clean_post_html(soup: BeautifulSoup) -> None:
         "div.caption-rec-wrap",
         "button.like-button",
         "div.like-button-container",
+        "div.image-link-expand",
+        "div.header-anchor-widget",
     ]
     for selector in selectors_to_remove:
         for element in soup.select(selector):

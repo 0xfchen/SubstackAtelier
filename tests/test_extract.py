@@ -51,7 +51,12 @@ def test_extract_post_id_returns_none_when_missing():
 def test_clean_post_html_strips_widgets_and_footers():
     html = (
         '<div class="available-content">'
+        '<h2>Heading<div class="header-anchor-widget"><button><svg></svg></button></div></h2>'
         "<p>Real content</p>"
+        '<a class="image-link" href="https://substackcdn.com/image/fetch/x">'
+        '<img src="https://substackcdn.com/image/fetch/x" alt="photo"/>'
+        '<div class="image-link-expand"><button><svg></svg></button></div>'
+        "</a>"
         '<div class="subscription-widget-wrap"><input placeholder="email"/></div>'
         '<div class="post-footer"><button>Share</button></div>'
         "</div>"
@@ -61,6 +66,8 @@ def test_clean_post_html_strips_widgets_and_footers():
     cleaned_str = str(soup)
     assert "Real content" in cleaned_str
     assert "subscription-widget-wrap" not in cleaned_str
+    assert "header-anchor-widget" not in cleaned_str
+    assert "image-link-expand" not in cleaned_str
 
 
 def test_extract_preloaded_post_data():

@@ -104,7 +104,7 @@ flowchart LR
 - [`scraper/storage.py`](scraper/storage.py): Markdown file writes (`save_to_file`), sanitized filename generation, relative link resolution (`build_file_link`), and metadata JSON merging (`save_posts_data_to_json`).
 - [`scraper/sync.py`](scraper/sync.py): Incremental sync state persistence (`load_sync_state`, `save_sync_state`), ISO 8601 parsing, cutoff checks, and API delta post fetching (`fetch_posts_from_api`).
 - [`scraper/__init__.py`](scraper/__init__.py): Exposes clean public API (`SubstackScraper`, `PageFetcher`, `RequestsFetcher`, `PlaywrightFetcher`, `BrowserManager`, `convert_html_to_markdown`, `get_credentials`, `BASE_CONTENT_DIR`, `main`, `parse_args`).
-- [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, missing image alt normalization, and `normalize_markdown()`.
+- [`scraper/converter.py`](scraper/converter.py): High-performance CommonMark/GFM conversion adapter wrapping `html-to-markdown` with syntax highlighting language preservation, GFM tables, missing image alt normalization, Substack SVG/image-link cleanup, and `normalize_markdown()`.
 - [`scraper/images.py`](scraper/images.py): Image URL resolution, filename sanitization, linked image cleanup, and parallel downloads into `content/<author>/images/<slug>/` via `ThreadPoolExecutor`.
 - [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles under `content/.browser_profiles/<browser>/`, session state at `content/storage_state.json`, and CDP attach.
 - [`scraper/fetchers/base.py`](scraper/fetchers/base.py): `PageFetcher` protocol (`fetch_soup`, `close`).
@@ -114,7 +114,7 @@ flowchart LR
 - [`scraper/substack.py`](scraper/substack.py): Concrete `SubstackScraper` class receiving an injected `PageFetcher` and coordinating post scraping and sync loops.
 - [`scraper/cli.py`](scraper/cli.py): CLI argument parser, `_build_page_fetcher`, and execution coordinator managing deterministic cleanup via `contextlib.ExitStack`.
 - [`reader/`](reader/): Static Astro reader based on Astro Tone, ingesting `../content/**/posts/*.{md,mdx}` with full-text search (Pagefind), tag filtering, syntax highlighting, and dark mode.
-- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (198 tests across per-module files).
+- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (205 tests across per-module files).
 
 ## Project Structure & Outputs
 - `content/<author>/posts/<slug>.md`: Scraped markdown files with rich YAML frontmatter.
