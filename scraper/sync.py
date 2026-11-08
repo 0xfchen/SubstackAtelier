@@ -9,14 +9,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 import requests
-from bs4 import BeautifulSoup
 
 from scraper.config import (
     DEFAULT_API_POST_LIMIT,
+    DEFAULT_REQUEST_INTERVAL_SECONDS,
     DEFAULT_REQUEST_TIMEOUT,
     MAX_API_SYNC_PAGES,
+    RATE_LIMIT_MAX_ATTEMPTS,
 )
-from scraper.fetchers.rate_limit import handle_rate_limit, is_rate_limited
+from scraper.fetchers.rate_limit import (
+    RequestThrottle,
+    get_retry_after_header,
+    handle_rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +150,7 @@ def save_sync_state(author_dir: str, state: dict[str, Any]) -> None:
 def _request_api_page(
     api_base_url: str,
     request_params: dict[str, Any],
-    max_attempts: int = 5,
+    max_attempts: int = RATE_LIMIT_MAX_ATTEMPTS,
 ) -> Any | None:
     """Request a single Substack API page with HTTP 429 backoff retry and JSON decoding."""
     for attempt in range(1, max_attempts + 1):
@@ -159,16 +164,16 @@ def _request_api_page(
             logger.warning("Error requesting Substack API %s: %s", api_base_url, request_error)
             return None
 
-        response_soup = BeautifulSoup(response.content, "html.parser") if response.content else None
-        if response.status_code == 429 and not is_rate_limited(response_soup):
-            response_soup = BeautifulSoup("<pre>Too Many Requests</pre>", "html.parser")
-
-        try:
-            if handle_rate_limit(response_soup, attempt, max_attempts, api_base_url):
-                continue
-        except RuntimeError as rate_limit_error:
-            logger.warning("Rate limit exceeded for Substack API %s: %s", api_base_url, rate_limit_error)
-            return None
+        retry_after = get_retry_after_header(getattr(response, "headers", None))
+        if handle_rate_limit(
+            None,
+            attempt,
+            max_attempts,
+            api_base_url,
+            status_code=response.status_code,
+            retry_after=retry_after,
+        ):
+            continue
 
         if not response.ok:
             logger.warning(
@@ -249,6 +254,9 @@ def fetch_posts_from_api(
 
     Returns:
         list[dict[str, Any]] | None: List of new post metadata dictionaries, or None on failure.
+
+    Raises:
+        RateLimitError: If Substack API rate limiting persists across retry attempts.
     """
     if not publication_url.endswith("/"):
         publication_url += "/"
@@ -260,8 +268,10 @@ def fetch_posts_from_api(
 
     api_base_url = f"{publication_url}api/v1/posts"
     current_cursor: str | None = None
+    throttle = RequestThrottle(DEFAULT_REQUEST_INTERVAL_SECONDS)
 
     for _ in range(max_pages):
+        throttle.wait()
         request_params: dict[str, Any] = {"limit": limit, "sort": "new"}
         if current_cursor is not None:
             request_params["cursor"] = current_cursor

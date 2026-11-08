@@ -96,7 +96,7 @@ flowchart LR
     ftch --> brw
 ```
 
-- [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), session state paths (`DEFAULT_STORAGE_STATE_PATH`, `BROWSER_PROFILES_DIR`), `SUBSTACK_SESSION_COOKIE_NAME`, `EXCLUDED_URL_KEYWORDS`, timeouts, and `get_credentials()` which loads from `.env` or environment variables.
+- [`scraper/config.py`](scraper/config.py): Global scraping constants, root content directory (`BASE_CONTENT_DIR = "content"`), session state paths (`DEFAULT_STORAGE_STATE_PATH`, `BROWSER_PROFILES_DIR`), `SUBSTACK_SESSION_COOKIE_NAME`, request pacing and rate-limit constants (`DEFAULT_REQUEST_INTERVAL_SECONDS`, `MAX_REQUEST_INTERVAL_SECONDS`, `MAX_RETRY_AFTER_SECONDS`, `RATE_LIMIT_MAX_ATTEMPTS`, `RATE_LIMIT_EXIT_CODE`), `EXCLUDED_URL_KEYWORDS`, timeouts, and `get_credentials()` which loads from `.env` or environment variables.
 - [`scraper/url_utils.py`](scraper/url_utils.py): URL validation, publication URL extraction, `get_slug_from_url()`, and `extract_main_part()` supporting custom Substack domains (e.g. `blog.bytebytego.com`, `newsletter.pragmaticengineer.com`).
 - [`scraper/discovery.py`](scraper/discovery.py): Publication URL discovery via sitemap and RSS feed crawling (`discover_post_urls`) with keyword filtering.
 - [`scraper/extract.py`](scraper/extract.py): Substack DOM extraction, ld+json parsing, promotional widget cleaning, YouTube embed transformations, and post HTML-to-Markdown conversion (`extract_post_data`, `post_html_to_markdown`).
@@ -108,13 +108,13 @@ flowchart LR
 - [`scraper/images.py`](scraper/images.py): Image URL resolution, filename sanitization, linked image cleanup, and parallel downloads into `content/<author>/images/<slug>/` via `ThreadPoolExecutor`.
 - [`scraper/browser.py`](scraper/browser.py): `BrowserManager` launching system Chrome and Edge directly via Playwright channels (`channel="chrome"`, `channel="msedge"`), persistent profiles under `content/.browser_profiles/<browser>/`, session state at `content/storage_state.json`, and CDP attach.
 - [`scraper/fetchers/base.py`](scraper/fetchers/base.py): `PageFetcher` protocol (`fetch_soup`, `close`).
-- [`scraper/fetchers/rate_limit.py`](scraper/fetchers/rate_limit.py): Jittered exponential backoff and HTTP 429 rate limit detection (`is_rate_limited`, `compute_backoff_delay`, `handle_rate_limit`).
+- [`scraper/fetchers/rate_limit.py`](scraper/fetchers/rate_limit.py): Jittered exponential backoff, HTTP 429 rate-limit detection, `Retry-After` header parsing, and adaptive request pacing (`RateLimitError`, `RequestThrottle`, `parse_retry_after`, `is_rate_limited`, `compute_backoff_delay`, `handle_rate_limit`).
 - [`scraper/fetchers/http.py`](scraper/fetchers/http.py): `RequestsFetcher` for free / public Substack posts via `requests` and `BeautifulSoup`.
 - [`scraper/fetchers/playwright.py`](scraper/fetchers/playwright.py): `PlaywrightFetcher` for authenticated / premium Substack posts using Playwright with session reuse and retry handling.
 - [`scraper/substack.py`](scraper/substack.py): Concrete `SubstackScraper` class receiving an injected `PageFetcher` and coordinating post scraping and sync loops.
 - [`scraper/cli.py`](scraper/cli.py): CLI argument parser, `_build_page_fetcher`, and execution coordinator managing deterministic cleanup via `contextlib.ExitStack`.
 - [`reader/`](reader/): Static Astro reader based on Astro Tone, ingesting `../content/**/posts/*.{md,mdx}` with full-text search (Pagefind), tag filtering, syntax highlighting, and dark mode.
-- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (138 tests across per-module files).
+- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (198 tests across per-module files).
 
 ## Project Structure & Outputs
 - `content/<author>/posts/<slug>.md`: Scraped markdown files with rich YAML frontmatter.

@@ -75,10 +75,17 @@ Scrape a single post directly:
 uv run scraper --url https://example.substack.com/p/my-post
 ```
 
-Limit the number of posts to scrape:
+Limit the number of post URLs to process (`--number N` selects the first `N` discovered URLs):
 ```bash
 uv run scraper --url https://example.substack.com --number 5
 ```
+
+Pace outbound network requests with a minimum delay between requests (defaults to `1.0` second; pass `0` to disable):
+```bash
+uv run scraper --url https://example.substack.com --delay 2
+```
+
+> **Rate-Limit Handling & Resuming**: If a publication persistently returns HTTP `429 Too Many Requests` after backoff retries (or returns a large `Retry-After` header), the scraper stops immediately, saves all metadata and posts collected so far, and exits with code `75` (`EX_TEMPFAIL`). Re-run the same command later (optionally with a larger `--delay`) to resume—already-saved posts are skipped without network requests.
 
 Download images locally and rewrite markdown image links:
 ```bash

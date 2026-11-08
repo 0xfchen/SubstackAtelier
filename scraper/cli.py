@@ -2,9 +2,15 @@ import argparse
 import contextlib
 import logging
 import sys
+from urllib.parse import urlparse
 
-from scraper.config import BASE_CONTENT_DIR
+from scraper.config import (
+    BASE_CONTENT_DIR,
+    DEFAULT_REQUEST_INTERVAL_SECONDS,
+    RATE_LIMIT_EXIT_CODE,
+)
 from scraper.fetchers import PageFetcher, PlaywrightFetcher, RequestsFetcher
+from scraper.fetchers.rate_limit import RateLimitError
 from scraper.substack import SubstackScraper
 from scraper.url_utils import is_post_url
 
@@ -75,6 +81,10 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     if args.sync and is_post_url(args.url):
         parser.error("--sync can only be used with publication URLs, not individual post URLs.")
 
+    # 6. Request pacing validation
+    if args.delay < 0:
+        parser.error("--delay cannot be negative.")
+
 
 def parse_args(args_list: list[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments for the SubstackAtelier scraper CLI.
@@ -131,7 +141,14 @@ Examples:
         "--number",
         type=int,
         default=0,
-        help="Number of posts to scrape (0 = all posts).",
+        help="Number of post URLs to process (0 = all posts).",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=DEFAULT_REQUEST_INTERVAL_SECONDS,
+        metavar="SECONDS",
+        help=f"Minimum delay in seconds between network requests (default: {DEFAULT_REQUEST_INTERVAL_SECONDS}; 0 disables pacing).",
     )
     parser.add_argument(
         "--images",
@@ -240,6 +257,7 @@ Examples:
 
 def _build_page_fetcher(args: argparse.Namespace) -> PageFetcher:
     """Construct the appropriate page fetcher based on CLI options."""
+    request_interval_seconds = getattr(args, "delay", DEFAULT_REQUEST_INTERVAL_SECONDS)
     if args.premium:
         return PlaywrightFetcher(
             browser=args.browser or "chrome",
@@ -251,8 +269,9 @@ def _build_page_fetcher(args: argparse.Namespace) -> PageFetcher:
             storage_state=args.storage_state or "",
             cdp_url=args.cdp_url or "",
             start_url=args.url,
+            request_interval_seconds=request_interval_seconds,
         )
-    return RequestsFetcher()
+    return RequestsFetcher(request_interval_seconds=request_interval_seconds)
 
 
 def main() -> None:
@@ -275,17 +294,28 @@ def main() -> None:
         args.directory = BASE_CONTENT_DIR
 
     page_fetcher = _build_page_fetcher(args)
-    with contextlib.ExitStack() as exit_stack:
-        exit_stack.callback(page_fetcher.close)
-        substack_scraper = SubstackScraper(
-            base_substack_url=args.url,
-            fetcher=page_fetcher,
-            content_save_dir=args.directory,
-            download_images=args.images,
-            overwrite=args.overwrite,
-            clean_content=args.clean_content,
+    substack_scraper: SubstackScraper | None = None
+    try:
+        with contextlib.ExitStack() as exit_stack:
+            exit_stack.callback(page_fetcher.close)
+            substack_scraper = SubstackScraper(
+                base_substack_url=args.url,
+                fetcher=page_fetcher,
+                content_save_dir=args.directory,
+                download_images=args.images,
+                overwrite=args.overwrite,
+                clean_content=args.clean_content,
+            )
+            if args.sync:
+                substack_scraper.sync_posts()
+            else:
+                substack_scraper.scrape_posts(args.number)
+    except RateLimitError as error:
+        host = urlparse(error.url or args.url).netloc or args.url
+        saved_count = getattr(substack_scraper, "last_saved_count", 0) if substack_scraper is not None else 0
+        logger.error(
+            "Rate limited by %s (%d post(s) saved): progress saved; re-run later to resume, optionally with a larger --delay.",
+            host,
+            saved_count,
         )
-        if args.sync:
-            substack_scraper.sync_posts()
-        else:
-            substack_scraper.scrape_posts(args.number)
+        sys.exit(RATE_LIMIT_EXIT_CODE)

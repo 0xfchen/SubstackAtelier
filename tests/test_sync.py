@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 import requests
 
+import scraper.sync as sync_module
+from scraper.fetchers.rate_limit import RateLimitError
 from scraper.sync import (
     _is_cutoff_reached,
     fetch_posts_from_api,
@@ -15,6 +17,12 @@ from scraper.sync import (
     save_sync_state,
 )
 from tests.conftest import FakeResponse, FakeScraper
+
+
+@pytest.fixture(autouse=True)
+def zero_sync_api_delay(monkeypatch):
+    """Disable inter-page sleep in unit tests unless explicitly testing throttling."""
+    monkeypatch.setattr("scraper.sync.DEFAULT_REQUEST_INTERVAL_SECONDS", 0.0)
 
 
 def test_sync_state_load_and_save(tmp_path):
@@ -370,16 +378,21 @@ def test_fetch_posts_from_api_legacy_top_level_list_response(monkeypatch):
     assert len(recorded_calls) == 1
 
 
-def test_fetch_posts_from_api_retries_on_http_429_with_backoff(monkeypatch):
-    """Verify HTTP 429 response triggers jittered backoff retry before succeeding."""
-    page_payload = {
+def test_fetch_posts_from_api_retries_on_http_429_with_retry_after(monkeypatch):
+    """Verify HTTP 429 with Retry-After header sleeps for requested duration and continues pagination."""
+    page_1_payload = {
         "posts": [{"id": 300, "slug": "post-3", "post_date": "2026-09-25T12:00:00.000Z"}],
+        "nextCursor": "cursor-2",
+    }
+    page_2_payload = {
+        "posts": [{"id": 200, "slug": "post-2", "post_date": "2026-09-20T12:00:00.000Z"}],
         "nextCursor": None,
     }
     responses = iter(
         [
-            FakeResponse({}, ok=False, status_code=429),
-            FakeResponse(page_payload, ok=True, status_code=200),
+            FakeResponse({}, ok=False, status_code=429, headers={"Retry-After": "4"}),
+            FakeResponse(page_1_payload, ok=True, status_code=200),
+            FakeResponse(page_2_payload, ok=True, status_code=200),
         ]
     )
     slept_durations: list[float] = []
@@ -395,13 +408,14 @@ def test_fetch_posts_from_api_retries_on_http_429_with_backoff(monkeypatch):
 
     delta = fetch_posts_from_api("https://example.substack.com")
 
-    assert delta == page_payload["posts"]
-    assert len(slept_durations) == 1
-    assert slept_durations[0] > 0
+    assert delta is not None
+    assert [post["id"] for post in delta] == [300, 200]
+    assert slept_durations == [4.0]
+    assert not hasattr(sync_module, "BeautifulSoup")
 
 
-def test_fetch_posts_from_api_persistent_http_429_returns_none(monkeypatch):
-    """Verify persistent HTTP 429 across all retry attempts returns None cleanly."""
+def test_fetch_posts_from_api_persistent_http_429_raises_rate_limit_error(monkeypatch):
+    """Verify persistent HTTP 429 across all retry attempts raises RateLimitError instead of returning None."""
     slept_durations: list[float] = []
 
     monkeypatch.setattr(
@@ -413,9 +427,9 @@ def test_fetch_posts_from_api_persistent_http_429_returns_none(monkeypatch):
         lambda duration: slept_durations.append(duration),
     )
 
-    result = fetch_posts_from_api("https://example.substack.com")
+    with pytest.raises(RateLimitError):
+        fetch_posts_from_api("https://example.substack.com")
 
-    assert result is None
     assert len(slept_durations) == 4
 
 

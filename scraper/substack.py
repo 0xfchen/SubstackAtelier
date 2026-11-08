@@ -16,6 +16,7 @@ from scraper.config import BASE_CONTENT_DIR
 from scraper.discovery import discover_post_urls
 from scraper.extract import extract_post_data
 from scraper.fetchers.base import PageFetcher
+from scraper.fetchers.rate_limit import RateLimitError
 from scraper.frontmatter import combine_metadata_and_content, extract_metadata_from_md
 from scraper.images import count_images_in_markdown, process_markdown_images
 from scraper.storage import build_file_link, get_filename_from_url, save_posts_data_to_json, save_to_file
@@ -60,6 +61,7 @@ class SubstackScraper:
         self.fetcher: PageFetcher = fetcher
         self.overwrite: bool = overwrite
         self.clean_content: bool = clean_content
+        self.last_saved_count: int = 0
         self.is_single_post: bool = is_post_url(base_substack_url)
         self.post_slug: str | None = get_post_slug(base_substack_url) if self.is_single_post else None
         original_url = base_substack_url
@@ -227,36 +229,52 @@ class SubstackScraper:
         }
 
     def scrape_posts(self, limit: int = 0) -> None:
-        """Iterate over all post URLs, scraping and saving them to disk.
+        """Iterate over post URLs, scraping and saving them to disk.
 
         Args:
-            limit: Number of posts to download (0 = scrape all).
+            limit: Number of post URLs to process (0 = scrape all).
+
+        Raises:
+            RateLimitError: If HTTP 429 rate limiting persists; collected progress is saved before re-raising.
         """
-        posts_data = []
-        count = 0
-        total = limit if limit != 0 else len(self.post_urls)
-        with tqdm(total=total, desc="Scraping posts") as progress_bar:
-            for url in self.post_urls:
+        selected_urls = self.post_urls[:limit] if limit > 0 else self.post_urls
+        posts_data: list[dict[str, Any]] = []
+        saved_count = 0
+        skipped_count = 0
+        failed_count = 0
+        rate_limit_error: RateLimitError | None = None
+
+        with tqdm(total=len(selected_urls), desc="Scraping posts") as progress_bar:
+            for url in selected_urls:
                 try:
                     entry = self._scrape_single_post(url, progress_bar=progress_bar)
                     if entry is not None:
                         posts_data.append(entry)
+                        saved_count += 1
                     else:
-                        total += 1
-                        progress_bar.total = total
-                        progress_bar.refresh()
-                        continue
+                        skipped_count += 1
+                except RateLimitError as error:
+                    rate_limit_error = error
+                    break
                 except Exception as error:
+                    failed_count += 1
                     progress_bar.write(f"Error scraping post: {error}")
 
-                count += 1
                 progress_bar.update(1)
 
-                if limit != 0 and count >= limit:
-                    break
-
-        save_posts_data_to_json(self.metadata_file_path, posts_data)
-        logger.info("Saved %d posts to %s", len(posts_data), self.metadata_file_path)
+        self.last_saved_count = saved_count
+        if posts_data or rate_limit_error is None:
+            save_posts_data_to_json(self.metadata_file_path, posts_data)
+        logger.info(
+            "Saved %d posts to %s (saved=%d, skipped=%d, failed=%d)",
+            len(posts_data),
+            self.metadata_file_path,
+            saved_count,
+            skipped_count,
+            failed_count,
+        )
+        if rate_limit_error is not None:
+            raise rate_limit_error
 
     def sync_posts(self) -> int:
         """Execute incremental delta synchronization for the publication.
@@ -269,6 +287,7 @@ class SubstackScraper:
 
         Raises:
             ValueError: If invoked on an individual post URL instead of a publication.
+            RateLimitError: If rate limiting persists during API discovery or post scraping.
         """
         if self.is_single_post:
             raise ValueError("sync_posts() cannot be called on a single post URL.")
@@ -306,6 +325,7 @@ class SubstackScraper:
             logger.info("Sync up to date: 0 new posts found.")
             cursor["last_sync_at"] = datetime.now(UTC).isoformat()
             save_sync_state(self.author_dir, cursor)
+            self.last_saved_count = 0
             return 0
 
         logger.info("Found %d new post(s) to sync.", len(delta_posts))
@@ -314,6 +334,7 @@ class SubstackScraper:
         last_contiguous_post: dict[str, Any] | None = None
         first_failed_post_url: str | None = None
         first_failed_post_slug: str | None = None
+        rate_limit_error: RateLimitError | None = None
 
         with tqdm(total=len(delta_posts), desc="Syncing delta posts") as progress_bar:
             for post in reversed(delta_posts):
@@ -325,6 +346,12 @@ class SubstackScraper:
                 entry: dict[str, Any] | None = None
                 try:
                     entry = self._scrape_single_post(post_url, progress_bar=progress_bar)
+                except RateLimitError as error:
+                    if first_failed_post_url is None:
+                        first_failed_post_url = post_url
+                        first_failed_post_slug = post_slug
+                    rate_limit_error = error
+                    break
                 except Exception as error:
                     progress_bar.write(f"Error syncing post {post_url}: {error}")
 
@@ -338,6 +365,7 @@ class SubstackScraper:
 
                 progress_bar.update(1)
 
+        self.last_saved_count = len(new_entries)
         if new_entries:
             save_posts_data_to_json(self.metadata_file_path, posts_data=new_entries)
 
@@ -358,6 +386,9 @@ class SubstackScraper:
         cursor["last_sync_at"] = datetime.now(UTC).isoformat()
         cursor["total_synced_posts"] = cursor.get("total_synced_posts", 0) + len(new_entries)
         save_sync_state(self.author_dir, cursor)
+
+        if rate_limit_error is not None:
+            raise rate_limit_error
 
         logger.info("Sync completed: %d post(s) synced successfully.", len(new_entries))
         return len(new_entries)

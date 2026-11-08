@@ -84,6 +84,7 @@ class FakeResponse:
         status_code: int = 200,
         params: dict[str, Any] | None = None,
         json_error: Exception | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._json_data = json_data
         self.content = content
@@ -91,6 +92,7 @@ class FakeResponse:
         self.status_code = status_code
         self.params = params
         self._json_error = json_error
+        self.headers = headers or {}
 
     def json(self) -> Any:
         if self._json_error is not None:
@@ -101,7 +103,14 @@ class FakeResponse:
 class FakeHttpResponse:
     """Fake response specifically simulating raw bytes content."""
 
-    def __init__(self, content: bytes, status_code: int = 200, ok: bool = True) -> None:
+    def __init__(
+        self,
+        content: bytes,
+        status_code: int = 200,
+        ok: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.content = content
         self.status_code = status_code
         self.ok = ok
+        self.headers = headers or {}

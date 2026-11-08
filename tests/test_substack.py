@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from scraper import sync
 from scraper.fetchers.http import RequestsFetcher
+from scraper.fetchers.rate_limit import RateLimitError
 from scraper.substack import SubstackScraper
 from tests.conftest import FakeFetcher, FakeScraper
 
@@ -496,3 +497,201 @@ def test_substack_scraper_context_manager_closes_fetcher(tmp_path):
             ):
                 raise RuntimeError("Context error")
         assert failing_fetcher.closed is True
+
+
+def test_scrape_posts_stops_and_saves_progress_on_rate_limit(tmp_path):
+    """Verify persistent 429 mid-scrape stops loop, skips later URLs, saves collected metadata, and re-raises."""
+    urls = [
+        "https://example.substack.com/p/post-1",
+        "https://example.substack.com/p/post-2",
+        "https://example.substack.com/p/post-3",
+    ]
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path), post_urls=urls)
+
+    requested_urls: list[str] = []
+
+    def fake_scrape_single(url, progress_bar=None):
+        requested_urls.append(url)
+        if url.endswith("post-1"):
+            return {"title": "Post 1", "slug": "post-1", "post_id": 1, "date": "2026-09-20"}
+        if url.endswith("post-2"):
+            raise RateLimitError(url=url)
+        return {"title": "Post 3", "slug": "post-3", "post_id": 3, "date": "2026-09-22"}
+
+    scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
+
+    with pytest.raises(RateLimitError):
+        scraper.scrape_posts()
+
+    assert requested_urls == [
+        "https://example.substack.com/p/post-1",
+        "https://example.substack.com/p/post-2",
+    ]
+    assert scraper.last_saved_count == 1
+    with open(scraper.metadata_file_path, encoding="utf-8") as metadata_file:
+        saved_metadata = json.load(metadata_file)
+    assert [entry["slug"] for entry in saved_metadata] == ["post-1"]
+
+
+def test_sync_posts_bootstrap_rate_limit_does_not_create_sync_state(tmp_path):
+    """Verify a rate limit during initial sync bootstrap does not record sync_state.json."""
+    urls = [
+        "https://example.substack.com/p/post-1",
+        "https://example.substack.com/p/post-2",
+    ]
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path), post_urls=urls)
+
+    def fake_scrape_single(url, progress_bar=None):
+        if url.endswith("post-1"):
+            return {"title": "Post 1", "slug": "post-1", "post_id": 1, "date": "2026-09-25"}
+        raise RateLimitError(url=url)
+
+    scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
+
+    with pytest.raises(RateLimitError):
+        scraper.sync_posts()
+
+    sync_state_file = tmp_path / "example" / "sync_state.json"
+    assert not sync_state_file.exists()
+
+
+def test_sync_posts_api_rate_limit_propagates_without_sitemap_fallback(tmp_path, monkeypatch):
+    """Verify RateLimitError from fetch_posts_from_api propagates without falling back to sitemap discovery."""
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
+    initial_cursor = {
+        "last_sync_at": "2026-09-20T00:00:00Z",
+        "last_post_date": "2026-09-20T10:00:00.000Z",
+        "last_post_id": 100,
+        "last_post_slug": "post-100",
+        "total_synced_posts": 10,
+    }
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
+
+    monkeypatch.setattr(
+        "scraper.substack.fetch_posts_from_api",
+        Mock(side_effect=RateLimitError("https://example.substack.com/api/v1/posts")),
+    )
+    scrape_posts_mock = Mock()
+    monkeypatch.setattr(scraper, "scrape_posts", scrape_posts_mock)
+
+    with pytest.raises(RateLimitError):
+        scraper.sync_posts()
+
+    scrape_posts_mock.assert_not_called()
+    assert sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path) == initial_cursor
+
+
+def test_sync_posts_delta_rate_limit_stops_loop_and_holds_back_cursor(tmp_path, monkeypatch, caplog):
+    """Verify RateLimitError in delta loop stops later requests, saves collected entries, and holds back cursor."""
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path))
+    initial_cursor = {
+        "last_sync_at": "2026-09-20T00:00:00Z",
+        "last_post_date": "2026-09-20T10:00:00.000Z",
+        "last_post_id": 100,
+        "last_post_slug": "post-100",
+        "total_synced_posts": 10,
+    }
+    sync.save_sync_state(scraper.author_dir, initial_cursor)
+
+    delta_api_posts = [
+        {
+            "id": 200,
+            "slug": "newest-post",
+            "post_date": "2026-09-25T15:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/newest-post",
+        },
+        {
+            "id": 150,
+            "slug": "middle-post",
+            "post_date": "2026-09-22T12:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/middle-post",
+        },
+        {
+            "id": 110,
+            "slug": "oldest-post",
+            "post_date": "2026-09-21T10:00:00.000Z",
+            "canonical_url": "https://example.substack.com/p/oldest-post",
+        },
+    ]
+    monkeypatch.setattr("scraper.substack.fetch_posts_from_api", Mock(return_value=delta_api_posts))
+
+    requested_urls: list[str] = []
+
+    def fake_scrape_single(url, progress_bar=None):
+        requested_urls.append(url)
+        if url.endswith("oldest-post"):
+            return {"title": "Oldest", "slug": "oldest-post", "post_id": 110, "date": "2026-09-21"}
+        raise RateLimitError(url=url)
+
+    scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
+
+    with pytest.raises(RateLimitError):
+        scraper.sync_posts()
+
+    assert requested_urls == [
+        "https://example.substack.com/p/oldest-post",
+        "https://example.substack.com/p/middle-post",
+    ]
+    with open(scraper.metadata_file_path, encoding="utf-8") as metadata_file:
+        saved_metadata = json.load(metadata_file)
+    assert [entry["slug"] for entry in saved_metadata] == ["oldest-post"]
+
+    updated_cursor = sync.load_sync_state(scraper.author_dir, scraper.metadata_file_path)
+    assert updated_cursor is not None
+    assert updated_cursor["last_post_id"] == 110
+    assert updated_cursor["last_post_slug"] == "oldest-post"
+    assert updated_cursor["last_post_date"] == "2026-09-21T10:00:00.000Z"
+    assert not any("Sync completed" in record.message for record in caplog.records)
+
+
+def test_scrape_posts_progress_total_and_limit_semantics(tmp_path, monkeypatch):
+    """Verify limit slices URLs up front and progress bar total stays fixed across success, skip, and failure."""
+    urls = [
+        "https://example.substack.com/p/post-1",
+        "https://example.substack.com/p/post-2",
+        "https://example.substack.com/p/post-3",
+        "https://example.substack.com/p/post-4",
+    ]
+    scraper = FakeScraper("https://example.substack.com", content_save_dir=str(tmp_path), post_urls=urls)
+
+    processed_urls: list[str] = []
+
+    def fake_scrape_single(url, progress_bar=None):
+        processed_urls.append(url)
+        if url.endswith("post-1"):
+            return {"title": "Post 1", "slug": "post-1", "post_id": 1, "date": "2026-09-20"}
+        if url.endswith("post-2"):
+            return None  # skipped
+        raise ValueError("HTTP 404")  # failed
+
+    scraper._scrape_single_post = Mock(side_effect=fake_scrape_single)
+
+    created_bars: list[Mock] = []
+
+    class FakeTqdm:
+        def __init__(self, total: int, desc: str = "", **kwargs):
+            self.total = total
+            self.desc = desc
+            self.updates: list[int] = []
+            created_bars.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        def update(self, step: int = 1):
+            self.updates.append(step)
+
+        def write(self, message: str):
+            pass
+
+    monkeypatch.setattr("scraper.substack.tqdm", FakeTqdm)
+
+    scraper.scrape_posts(limit=3)
+
+    assert processed_urls == urls[:3]
+    assert len(created_bars) == 1
+    assert created_bars[0].total == 3
+    assert created_bars[0].updates == [1, 1, 1]

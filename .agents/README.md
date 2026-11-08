@@ -58,6 +58,7 @@ Unified, chronological index of all retroactively created issues and plans mappe
 | **`stm-050`** | **Issue** | `refactor` | Split Monolithic `test_scraper.py` into Per-Module Test Files | [`issues/stm-050-split-test-suite.md`](issues/stm-050-split-test-suite.md) |
 | **`stm-051`** | **Issue** | `fix` | Update Incremental Sync for Substack Cursor Pagination | [`issues/stm-051-update-substack-sync-api-pagination.md`](issues/stm-051-update-substack-sync-api-pagination.md) |
 | **`stm-052`** | **Issue** | `fix` | Detect Unconfirmed Premium Login | [`issues/stm-052-detect-unconfirmed-premium-login.md`](issues/stm-052-detect-unconfirmed-premium-login.md) |
+| **`stm-053`** | **Issue** | `fix` | Handle Plain-Text Rate Limits and Preserve Scrape Progress | [`issues/stm-053-handle-plain-text-rate-limits.md`](issues/stm-053-handle-plain-text-rate-limits.md) |
 
 ---
 

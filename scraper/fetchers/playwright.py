@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from time import sleep
 
 from bs4 import BeautifulSoup
@@ -10,15 +11,22 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from scraper.browser import BrowserManager, PlaywrightSession
 from scraper.config import (
+    DEFAULT_REQUEST_INTERVAL_SECONDS,
     PLAYWRIGHT_CONTENT_RENDER_TIMEOUT_MS,
     PLAYWRIGHT_HYDRATION_TIMEOUT_MS,
     PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS,
     PLAYWRIGHT_NAVIGATION_TIMEOUT_MS,
     PLAYWRIGHT_SELECTOR_TIMEOUT_MS,
+    RATE_LIMIT_MAX_ATTEMPTS,
     SUBSTACK_SESSION_COOKIE_NAME,
     get_credentials,
 )
-from scraper.fetchers.rate_limit import handle_rate_limit
+from scraper.fetchers.rate_limit import (
+    RequestThrottle,
+    compute_backoff_delay,
+    get_retry_after_header,
+    handle_rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +45,7 @@ class PlaywrightFetcher:
         storage_state: str = "",
         cdp_url: str = "",
         start_url: str = "",
+        request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
     ) -> None:
         """Initialize the premium fetcher with Playwright browser automation.
 
@@ -50,10 +59,13 @@ class PlaywrightFetcher:
             storage_state: Optional path to storage state JSON file for saved cookies.
             cdp_url: Optional remote debugging URL (CDP) to attach to an active browser.
             start_url: Publication or initial URL to navigate to when skipping login.
+            request_interval_seconds: Minimum delay in seconds between network requests.
 
         Raises:
             ValueError: If credentials are missing when login is required.
         """
+        self.request_interval_seconds = request_interval_seconds
+        self.throttle = RequestThrottle(request_interval_seconds)
         self.email, self.password = get_credentials()
         has_explicit_session_reuse = skip_login or bool(storage_state) or bool(cdp_url)
 
@@ -198,24 +210,31 @@ class PlaywrightFetcher:
         logger.info("Login successful!")
         self._save_session_state()
 
-    def fetch_soup(self, url: str, max_attempts: int = 5) -> BeautifulSoup | None:
+    def fetch_soup(self, url: str, max_attempts: int = RATE_LIMIT_MAX_ATTEMPTS) -> BeautifulSoup | None:
         """Fetch and parse post HTML using authenticated Playwright session.
 
         Args:
             url: Post URL to fetch.
-            max_attempts: Number of attempts on rate-limiting.
+            max_attempts: Number of attempts on rate-limiting or transient errors.
 
         Returns:
             BeautifulSoup | None: Parsed DOM or None if premium access denied.
 
         Raises:
+            RateLimitError: If HTTP 429 rate limiting persists after max_attempts.
             RuntimeError: If retry attempts are exhausted.
-            ValueError: If an unexpected error occurs during fetch.
+            ValueError: If a non-OK HTTP status or unexpected error occurs during fetch.
         """
+        if not hasattr(self, "throttle"):
+            self.throttle = RequestThrottle(getattr(self, "request_interval_seconds", DEFAULT_REQUEST_INTERVAL_SECONDS))
+
+        had_rate_limit = False
         for attempt in range(1, max_attempts + 1):
+            self.throttle.wait()
             try:
+                navigation_response = None
                 try:
-                    self.page.goto(url, wait_until="domcontentloaded")
+                    navigation_response = self.page.goto(url, wait_until="domcontentloaded")
                 except PlaywrightError as exc:
                     if "interrupted by another navigation" in str(exc).lower():
                         logger.debug(
@@ -232,32 +251,68 @@ class PlaywrightFetcher:
                     else:
                         raise
 
-                # Wait for content or paywall selectors to be present
-                try:
-                    self.page.wait_for_selector(
-                        "div.available-content, h1.post-title, h2.paywall-title, body > pre",
-                        timeout=PLAYWRIGHT_CONTENT_RENDER_TIMEOUT_MS,
-                    )
-                except PlaywrightTimeoutError:
-                    logger.warning("Timeout waiting for post content to render: %s", url)
+                raw_status = getattr(navigation_response, "status", None) if navigation_response is not None else None
+                status_code = raw_status if isinstance(raw_status, int) else None
+                raw_headers = getattr(navigation_response, "headers", None) if navigation_response is not None else None
+                retry_after = get_retry_after_header(raw_headers) if isinstance(raw_headers, Mapping) else None
 
-                # Substack SSR initially renders h2.paywall-title on paid posts before
-                # client-side hydration evaluates session auth. Wait for hydration if present.
-                if self.page.locator("h2.paywall-title").count() > 0:
+                # Wait for content or paywall selectors to be present when not an HTTP error
+                if status_code is None or (200 <= status_code < 300):
                     try:
                         self.page.wait_for_selector(
-                            "h2.paywall-title",
-                            state="detached",
-                            timeout=PLAYWRIGHT_HYDRATION_TIMEOUT_MS,
+                            "div.available-content, h1.post-title, h2.paywall-title, body > pre",
+                            timeout=PLAYWRIGHT_CONTENT_RENDER_TIMEOUT_MS,
                         )
                     except PlaywrightTimeoutError:
-                        pass
+                        logger.warning("Timeout waiting for post content to render: %s", url)
+
+                    # Substack SSR initially renders h2.paywall-title on paid posts before
+                    # client-side hydration evaluates session auth. Wait for hydration if present.
+                    if self.page.locator("h2.paywall-title").count() > 0:
+                        try:
+                            self.page.wait_for_selector(
+                                "h2.paywall-title",
+                                state="detached",
+                                timeout=PLAYWRIGHT_HYDRATION_TIMEOUT_MS,
+                            )
+                        except PlaywrightTimeoutError:
+                            pass
 
                 html_content = self.page.content()
-                soup = BeautifulSoup(html_content, "html.parser")
+                soup = BeautifulSoup(html_content if isinstance(html_content, str) else "", "html.parser")
 
-                if handle_rate_limit(soup, attempt, max_attempts, url):
+                if handle_rate_limit(
+                    soup,
+                    attempt,
+                    max_attempts,
+                    url,
+                    status_code=status_code,
+                    retry_after=retry_after,
+                ):
+                    had_rate_limit = True
                     continue
+
+                if status_code is not None:
+                    if 500 <= status_code < 600:
+                        if attempt >= max_attempts:
+                            raise ValueError(f"HTTP {status_code} for {url}")
+                        delay = compute_backoff_delay(attempt)
+                        logger.warning(
+                            "[%s/%s] HTTP %s for %s. Retrying in %.2f seconds...",
+                            attempt,
+                            max_attempts,
+                            status_code,
+                            url,
+                            delay,
+                        )
+                        sleep(delay)
+                        continue
+
+                    if not (200 <= status_code < 300):
+                        raise ValueError(f"HTTP {status_code} for {url}")
+
+                if had_rate_limit:
+                    self.throttle.record_rate_limit_recovery()
 
                 if soup.find("h2", class_="paywall-title"):
                     logger.info("Skipping premium article (no access): %s", url)

@@ -1,13 +1,16 @@
 """Tests for CLI argument parsing, validation, and fetcher wiring."""
 
+import logging
 import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
 from scraper.cli import BASE_CONTENT_DIR, _build_page_fetcher, main, parse_args
+from scraper.config import RATE_LIMIT_EXIT_CODE
 from scraper.fetchers.http import RequestsFetcher
 from scraper.fetchers.playwright import PlaywrightFetcher
+from scraper.fetchers.rate_limit import RateLimitError
 from tests.conftest import FakeFetcher
 
 
@@ -269,3 +272,61 @@ def test_cli_uses_base_content_dir_by_default(monkeypatch):
     main()
 
     assert captured_init_kwargs["content_save_dir"] == BASE_CONTENT_DIR
+
+
+def test_cli_delay_passed_to_fetchers_and_negative_rejected(monkeypatch):
+    """Verify --delay is forwarded to RequestsFetcher and PlaywrightFetcher, and negative --delay is rejected."""
+    args_http = parse_args(["--url", "https://example.substack.com", "--delay", "2.5"])
+    http_fetcher = _build_page_fetcher(args_http)
+    assert isinstance(http_fetcher, RequestsFetcher)
+    assert http_fetcher.request_interval_seconds == 2.5
+    assert http_fetcher.throttle.interval_seconds == 2.5
+
+    mock_session = MagicMock()
+    mock_session.context.cookies.return_value = [{"name": "substack.sid", "value": "valid-session"}]
+    monkeypatch.setattr("scraper.fetchers.playwright.BrowserManager.launch", lambda **kwargs: mock_session)
+    args_pw = parse_args(["--url", "https://example.substack.com", "--premium", "--skip-login", "--delay", "0"])
+    pw_fetcher = _build_page_fetcher(args_pw)
+    assert isinstance(pw_fetcher, PlaywrightFetcher)
+    assert pw_fetcher.request_interval_seconds == 0.0
+    assert pw_fetcher.throttle.interval_seconds == 0.0
+
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--url", "https://example.substack.com", "--delay", "-1"])
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("raise_in_init", [False, True])
+def test_cli_exits_with_rate_limit_code_and_closes_fetcher(monkeypatch, caplog, raise_in_init: bool):
+    """Verify RateLimitError during scraper init or scrape_posts logs summary, closes fetcher, and exits 75."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["scraper", "--url", "https://blog.bytebytego.com"],
+    )
+    fake_fetcher = FakeFetcher()
+    monkeypatch.setattr("scraper.cli._build_page_fetcher", lambda args: fake_fetcher)
+
+    if raise_in_init:
+        monkeypatch.setattr(
+            "scraper.cli.SubstackScraper.__init__",
+            Mock(side_effect=RateLimitError("https://blog.bytebytego.com/sitemap.xml")),
+        )
+    else:
+
+        def fake_init(self, **kwargs):
+            self.fetcher = kwargs.get("fetcher", fake_fetcher)
+            self.last_saved_count = 12
+
+        def fake_scrape(self, limit=0):
+            raise RateLimitError("https://blog.bytebytego.com/p/rate-limited")
+
+        monkeypatch.setattr("scraper.cli.SubstackScraper.__init__", fake_init)
+        monkeypatch.setattr("scraper.cli.SubstackScraper.scrape_posts", fake_scrape)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == RATE_LIMIT_EXIT_CODE
+    assert fake_fetcher.closed is True
+    assert any("blog.bytebytego.com" in record.message and "--delay" in record.message for record in caplog.records)

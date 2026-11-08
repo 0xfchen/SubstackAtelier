@@ -201,3 +201,52 @@ def test_login_succeeds_and_saves_state_when_session_cookie_present(tmp_path, mo
     fetcher.context.storage_state.assert_called_once_with(path=str(storage_file))
     if os.name != "nt":
         assert stat.S_IMODE(storage_file.stat().st_mode) == 0o600
+
+
+def test_playwright_fetcher_fetch_soup_retries_on_status_429(monkeypatch):
+    """Verify PlaywrightFetcher.fetch_soup retries when page.goto response has status 429."""
+    fetcher = PlaywrightFetcher.__new__(PlaywrightFetcher)
+    fetcher.request_interval_seconds = 0.0
+    fetcher.page = MagicMock()
+    fetcher.page.locator.return_value.count.return_value = 0
+
+    response_429 = MagicMock(status=429, headers={"retry-after": "3"})
+    response_200 = MagicMock(status=200, headers={})
+    fetcher.page.goto.side_effect = [response_429, response_200]
+    fetcher.page.content.side_effect = [
+        "Too Many Requests",
+        "<html><body><div class='available-content'>Premium article</div></body></html>",
+    ]
+
+    slept_durations: list[float] = []
+    monkeypatch.setattr("scraper.fetchers.rate_limit.sleep", lambda duration: slept_durations.append(duration))
+
+    soup = fetcher.fetch_soup("https://example.substack.com/p/paid-post", max_attempts=3)
+
+    assert soup is not None
+    assert "Premium article" in soup.text
+    assert slept_durations == [3.0]
+
+
+def test_playwright_fetcher_fetch_soup_detects_plain_text_rate_limit_when_response_is_none(monkeypatch):
+    """Verify PlaywrightFetcher.fetch_soup falls back to whole-document text detection when goto response is None."""
+    fetcher = PlaywrightFetcher.__new__(PlaywrightFetcher)
+    fetcher.request_interval_seconds = 0.0
+    fetcher.page = MagicMock()
+    fetcher.page.locator.return_value.count.return_value = 0
+
+    response_200 = MagicMock(status=200, headers={})
+    fetcher.page.goto.side_effect = [None, response_200]
+    fetcher.page.content.side_effect = [
+        "<html><body><pre>Too Many Requests</pre></body></html>",
+        "<html><body><div class='available-content'>Recovered after redirect</div></body></html>",
+    ]
+
+    slept_durations: list[float] = []
+    monkeypatch.setattr("scraper.fetchers.rate_limit.sleep", lambda duration: slept_durations.append(duration))
+
+    soup = fetcher.fetch_soup("https://example.substack.com/p/redirect-post", max_attempts=3)
+
+    assert soup is not None
+    assert "Recovered after redirect" in soup.text
+    assert len(slept_durations) == 1
