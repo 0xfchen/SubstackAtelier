@@ -1,5 +1,6 @@
 ---
 import config from '../../astro-theme-config';
+import FontToggle from './FontToggle.astro';
 import HeaderLink from './HeaderLink.astro';
 import ThemeToggle from './ThemeToggle.astro';
 import { withBase } from '../utils/paths';
@@ -18,7 +19,10 @@ const navItems = config.nav;
       <div class="nav-links">
         {navItems.map((item) => <HeaderLink href={item.href}>{item.label}</HeaderLink>)}
       </div>
-      <ThemeToggle />
+      <div class="nav-toggles">
+        <FontToggle />
+        <ThemeToggle />
+      </div>
     </div>
   </nav>
 </header>
@@ -42,9 +46,11 @@ const navItems = config.nav;
             header.contains(activeElement) &&
             activeElement.matches(':focus-visible');
 
+        const hasOpenPopover = header.querySelector('.font-toggle-wrapper.is-open') !== null;
+
         header.classList.toggle('is-scrolled', currentY > 8);
 
-        if (currentY < 24 || hasKeyboardFocus) {
+        if (currentY < 24 || hasKeyboardFocus || hasOpenPopover) {
           header.classList.remove('is-hidden');
         } else if (delta > 8 && currentY > 96) {
           header.classList.add('is-hidden');
@@ -152,6 +158,12 @@ const navItems = config.nav;
   display: flex;
   align-items: center;
   gap: var(--space-4);
+}
+
+.nav-toggles {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 @media (min-width: 55rem) {

@@ -13,9 +13,24 @@
   --prose-mark-bg: color-mix(in srgb, var(--color-blue) 22%, transparent);
   --prose-mark-fg: var(--label-primary);
 
+  font-family: var(--font-prose);
+  font-synthesis: style;
   font-size: clamp(1rem, 0.99rem + 0.04vw, 1.0156rem);
   line-height: 1.76;
   color: var(--label-primary);
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6,
+.prose th,
+.prose .callout::before,
+.prose img + em {
+  font-family: var(--font-sans);
+  font-synthesis: none;
 }
 
 .prose > * {

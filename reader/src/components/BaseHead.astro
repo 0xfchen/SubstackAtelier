@@ -95,17 +95,29 @@ const websiteJsonLd =
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-<!-- Theme init — runs early to prevent FOUC -->
+<!-- Theme & prose font init — runs early to prevent FOUC -->
 <script is:inline>
   (function () {
     let d;
+    let proseFont = 'sans';
     try {
       d = localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      const storedProseFont = localStorage.getItem('proseFont');
+      if (
+        storedProseFont === 'sans' ||
+        storedProseFont === 'serif' ||
+        storedProseFont === 'book' ||
+        storedProseFont === 'inter' ||
+        storedProseFont === 'system-serif'
+      ) {
+        proseFont = storedProseFont;
+      }
     } catch {
       d = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
     const el = document.documentElement;
     el.setAttribute('data-theme', d);
+    el.setAttribute('data-prose-font', proseFont);
     el.classList.add('no-transitions');
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { el.classList.remove('no-transitions'); });

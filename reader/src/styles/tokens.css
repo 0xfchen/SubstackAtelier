@@ -21,6 +21,30 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: 'Source Serif 4 Variable';
+  src: url('../assets/fonts/source-serif-4-latin-wght-normal.woff2') format('woff2');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Literata Variable';
+  src: url('../assets/fonts/literata-latin-wght-normal.woff2') format('woff2');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter Variable';
+  src: url('../assets/fonts/inter-latin-wght-normal.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ------------------------------------------------------------
    1. TYPOGRAPHY
    ------------------------------------------------------------ */
@@ -30,6 +54,19 @@
     'Pretendard Variable', Pretendard, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue',
     Arial, sans-serif;
   --font-mono: 'Tone Mono', Menlo, Consolas, ui-monospace, monospace;
+
+  /* Article Body Prose Font Presets */
+  --font-prose-sans: var(--font-sans);
+  --font-prose-serif:
+    'Source Serif 4 Variable', 'Source Serif 4', 'Iowan Old Style', Charter, Georgia, serif;
+  --font-prose-book:
+    'Literata Variable', 'Literata', 'Iowan Old Style', Charter, Georgia, serif;
+  --font-prose-inter:
+    'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-prose-system-serif:
+    'Iowan Old Style', Charter, 'Apple Garamond', Baskerville, 'Sitka Text', Cambria, Georgia,
+    ui-serif, serif;
+  --font-prose: var(--font-prose-sans);
 
   /* Type Scale */
   --text-large-title: 2.125rem;
@@ -231,6 +268,22 @@
      9. GLASSMORPHIC SURFACE TOKENS
      ------------------------------------------------------------ */
   --glass-bg: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+}
+
+:root[data-prose-font='serif'] {
+  --font-prose: var(--font-prose-serif);
+}
+
+:root[data-prose-font='book'] {
+  --font-prose: var(--font-prose-book);
+}
+
+:root[data-prose-font='inter'] {
+  --font-prose: var(--font-prose-inter);
+}
+
+:root[data-prose-font='system-serif'] {
+  --font-prose: var(--font-prose-system-serif);
 }
 
 /* Dark Mode — media query OR data-theme attribute (JS toggle) */

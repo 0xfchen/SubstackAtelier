@@ -1,0 +1,226 @@
+---
+import { PROSE_FONT_OPTIONS } from '../scripts/font-toggle';
+
+const fontStackByPreset = {
+  sans: 'var(--font-prose-sans)',
+  serif: 'var(--font-prose-serif)',
+  book: 'var(--font-prose-book)',
+  inter: 'var(--font-prose-inter)',
+  'system-serif': 'var(--font-prose-system-serif)',
+};
+---
+
+<div class="font-toggle-wrapper" id="font-toggle-container">
+  <button
+    type="button"
+    class="font-toggle-btn"
+    id="font-toggle-button"
+    data-font-toggle-btn
+    data-active-font="sans"
+    data-font-category="sans"
+    aria-label="Article font: Pretendard. Click to change font"
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-controls="font-toggle-menu"
+    title="Article font: Pretendard"
+  >
+    <span class="font-toggle-glyph" aria-hidden="true">Aa</span>
+  </button>
+
+  <div
+    class="font-toggle-menu"
+    id="font-toggle-menu"
+    data-font-toggle-menu
+    role="menu"
+    aria-label="Article body font"
+    hidden
+  >
+    <div class="font-toggle-menu-header">Article Font</div>
+    {
+      PROSE_FONT_OPTIONS.map((fontOption) => (
+        <button
+          type="button"
+          class:list={['font-toggle-option', { 'is-active': fontOption.id === 'sans' }]}
+          role="menuitemradio"
+          aria-checked={fontOption.id === 'sans' ? 'true' : 'false'}
+          data-font-option={fontOption.id}
+          style={`--option-font: ${fontStackByPreset[fontOption.id]};`}
+        >
+          <span class="font-option-sample" aria-hidden="true">
+            Aa
+          </span>
+          <span class="font-option-text">
+            <span class="font-option-label">{fontOption.label}</span>
+            <span class="font-option-desc">{fontOption.description}</span>
+          </span>
+          <span class="font-option-check" aria-hidden="true">
+            ✓
+          </span>
+        </button>
+      ))
+    }
+  </div>
+</div>
+
+<script>
+  import { mountFontToggle } from '../scripts/font-toggle';
+  import { onReady } from '../scripts/mount';
+
+  onReady(() => {
+    mountFontToggle();
+  });
+</script>
+
+<style>
+  .font-toggle-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .font-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+    color: var(--label-secondary);
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .font-toggle-btn:hover {
+    color: var(--label-primary);
+  }
+
+  .font-toggle-btn:focus-visible {
+    outline: 1px solid currentColor;
+    outline-offset: 0.25rem;
+  }
+
+  .font-toggle-wrapper.is-open .font-toggle-btn {
+    color: var(--label-primary);
+  }
+
+  .font-toggle-glyph {
+    font-family: var(--font-prose);
+    font-size: 0.9375rem;
+    font-weight: var(--weight-semibold);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    user-select: none;
+  }
+
+  .font-toggle-menu {
+    position: absolute;
+    top: calc(100% + var(--space-2));
+    right: 0;
+    min-width: 13.75rem;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--separator);
+    background-color: var(--bg-primary);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-header);
+  }
+
+  .font-toggle-menu[hidden] {
+    display: none;
+  }
+
+  .font-toggle-menu-header {
+    padding: var(--space-1) var(--space-2) var(--space-2);
+    font-family: var(--font-sans);
+    font-size: var(--text-caption-2);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--label-tertiary);
+    border-bottom: 1px solid color-mix(in srgb, var(--separator) 50%, transparent);
+    margin-bottom: var(--space-1);
+  }
+
+  .font-toggle-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--label-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .font-toggle-option:hover,
+  .font-toggle-option:focus-visible {
+    background-color: var(--fill-tertiary);
+    outline: none;
+  }
+
+  .font-toggle-option.is-active {
+    background-color: var(--fill-secondary);
+  }
+
+  .font-option-sample {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: var(--radius-xs);
+    background-color: var(--fill-quaternary);
+    font-family: var(--option-font);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--label-primary);
+    flex-shrink: 0;
+  }
+
+  .font-option-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .font-option-label {
+    font-family: var(--option-font);
+    font-size: var(--text-subheadline);
+    font-weight: 500;
+    line-height: 1.25;
+    color: var(--label-primary);
+  }
+
+  .font-option-desc {
+    font-family: var(--font-sans);
+    font-size: var(--text-caption-2);
+    line-height: 1.25;
+    color: var(--label-tertiary);
+  }
+
+  .font-option-check {
+    font-family: var(--font-sans);
+    font-size: var(--text-footnote);
+    font-weight: var(--weight-semibold);
+    color: var(--color-blue);
+    opacity: 0;
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+
+  .font-toggle-option.is-active .font-option-check {
+    opacity: 1;
+  }
+</style>
