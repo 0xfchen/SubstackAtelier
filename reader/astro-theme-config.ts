@@ -16,10 +16,10 @@ const config = {
     lang: 'en',
     locale: 'en_US',
     dateLocale: 'en-US',
-    title: 'Substack Reader',
-    logoLabel: 'Substack Reader',
+    title: 'Substack Atelier',
+    logoLabel: 'Substack Atelier',
     description: 'Personal local archive of Substack essays and newsletters.',
-    author: 'Substack Reader',
+    author: 'Substack Atelier',
     defaultOgImage: '/og.png',
   },
 

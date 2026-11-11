@@ -69,3 +69,4 @@ Unified, chronological index of all retroactively created issues and plans mappe
 - `build: raise minimum Python requirement to 3.11+`
 - `docs: modernize README.md with CLI package usage, browser options, and clean up obsolete references`
 - `chore: update default BASE_SUBSTACK_URL to https://substack.com/`
+- `chore: update reader site title to Substack Atelier`
