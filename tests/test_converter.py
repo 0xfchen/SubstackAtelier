@@ -225,3 +225,195 @@ def test_html_to_md_formats_cleanly_with_mdformat():
     assert "* First item" not in md
     assert "![image](https://example.com/photo.png)" in md
     assert "> A quote here." in md
+
+
+def test_convert_html_to_markdown_link_leading_trailing_whitespace():
+    """Verify leading and trailing whitespace inside anchor tags is hoisted outside."""
+    html_1 = 'As<a href="https://example.com/post"> the author notes</a>'
+    html_2 = 'The bottleneck becomes<a href="https://example.com/latency"> latency</a>'
+    html_3 = '<a href="https://example.com/1">First </a><a href="https://example.com/2">second</a>'
+
+    md_1 = convert_html_to_markdown(html_1)
+    md_2 = convert_html_to_markdown(html_2)
+    md_3 = convert_html_to_markdown(html_3)
+
+    assert md_1 is not None and "As [the author notes](https://example.com/post)" in md_1
+    assert md_2 is not None and "The bottleneck becomes [latency](https://example.com/latency)" in md_2
+    assert md_3 is not None and "[First](https://example.com/1) [second](https://example.com/2)" in md_3
+
+
+def test_convert_html_to_markdown_whitespace_only_link_replaced_with_space():
+    """Verify whitespace-only anchor tags are replaced with a space rather than a phantom URL link."""
+    html_content = (
+        '<p>Even in this case:<a href="https://example.com/post"> </a>'
+        '<em><a href="https://example.com/post">linked phrase</a>.</em></p>'
+    )
+    markdown_output = convert_html_to_markdown(html_content)
+
+    assert markdown_output is not None
+    assert "Even in this case: *[linked phrase](https://example.com/post).*" in markdown_output
+    assert "[https://example.com/post](https://example.com/post)" not in markdown_output
+
+
+def test_convert_html_to_markdown_zero_width_link_decomposed():
+    """Verify anchor tags containing only zero-width characters decompose cleanly."""
+    html_content = '<p>Zero width<a href="https://example.com/sponsor">\u2060</a>link</p>'
+    markdown_output = convert_html_to_markdown(html_content)
+
+    assert markdown_output is not None
+    assert "\u2060" not in markdown_output
+    assert "[https://example.com/sponsor]" not in markdown_output
+
+
+def test_convert_html_to_markdown_nested_emphasis_link_whitespace_hoisted():
+    """Verify whitespace inside anchor tags nested within strong or em is hoisted outside."""
+    html_content = '<p>Before<strong><a href="https://example.com"> bold link </a></strong>after</p>'
+    markdown_output = convert_html_to_markdown(html_content)
+
+    assert markdown_output is not None
+    assert "Before **[bold link](https://example.com)** after" in markdown_output
+
+
+def test_convert_html_to_markdown_multi_segment_links_preserve_spaces():
+    """Verify links with alternating formatting preserve boundary spaces."""
+    html_content = (
+        '<p><a href="https://example.com">Part one </a>'
+        '<strong><a href="https://example.com">Part two</a></strong>'
+        '<a href="https://example.com"> part three</a></p>'
+    )
+    markdown_output = convert_html_to_markdown(html_content)
+
+    assert markdown_output is not None
+    assert (
+        "[Part one](https://example.com) **[Part two](https://example.com)** [part three](https://example.com)"
+        in markdown_output
+    )
+
+
+def test_normalize_markdown_link_spacing_five_asterisk_bridge():
+    """Verify 5-asterisk bridges between links are cleanly split with balanced delimiters."""
+    raw_markdown = (
+        "You can **[get](https://example.com/1)*****[Tidy First?](https://example.com/2)*****"
+        "[from the publisher](https://example.com/3)**.\n"
+        "- **[OpenAI -](https://example.com/4)*****[A Practical Guide](https://example.com/5)***"
+    )
+    cleaned_markdown = normalize_markdown(raw_markdown)
+
+    assert (
+        "**[get](https://example.com/1)** ***[Tidy First?](https://example.com/2)*** **[from the publisher](https://example.com/3)**"
+        in cleaned_markdown
+    )
+    assert (
+        "- **[OpenAI -](https://example.com/4)** ***[A Practical Guide](https://example.com/5)***" in cleaned_markdown
+    )
+
+
+def test_normalize_markdown_inline_phantom_links():
+    """Verify inline phantom links are replaced with space while preserving standalone links."""
+    raw_markdown = (
+        "try this on your own codebase.[https://example.com/writeup](https://example.com/writeup)"
+        "**[Read the write-up](https://example.com/writeup)**\n\n"
+        "• **[Sponsor](https://example.com/sponsor)**[\u2060](https://example.com/sponsor) — Description.\n\n"
+        "[https://example.com/standalone](https://example.com/standalone)"
+    )
+    cleaned_markdown = normalize_markdown(raw_markdown)
+
+    assert "try this on your own codebase. **[Read the write-up](https://example.com/writeup)**" in cleaned_markdown
+    assert "• **[Sponsor](https://example.com/sponsor)** — Description." in cleaned_markdown
+    assert "[https://example.com/standalone](https://example.com/standalone)" in cleaned_markdown
+
+
+def test_normalize_markdown_link_boundary_spacing_and_exceptions():
+    """Verify missing space before/after links is restored while preserving exceptions."""
+    raw_markdown = (
+        "By early 2026,[over 30% of respondents](https://example.com/report)\n"
+        "**Summary sentence.**[Follow-up link](https://example.com/details)\n"
+        "The study [found](https://example.com/study)that performance improved.\n"
+        "([enclosed link](https://example.com/parens))\n"
+        '"[quoted link](https://example.com/quotes)"\n'
+        "The [note](https://example.com/noted)d details\n"
+        "The [O](https://example.com/oauth)*[Auth](https://example.com/oauth)* flow\n"
+        "![Alt text](https://example.com/image.png)"
+    )
+    cleaned_markdown = normalize_markdown(raw_markdown)
+
+    assert "By early 2026, [over 30% of respondents](https://example.com/report)" in cleaned_markdown
+    assert "**Summary sentence.** [Follow-up link](https://example.com/details)" in cleaned_markdown
+    assert "The study [found](https://example.com/study) that performance improved." in cleaned_markdown
+    assert "([enclosed link](https://example.com/parens))" in cleaned_markdown
+    assert '"[quoted link](https://example.com/quotes)"' in cleaned_markdown
+    assert "The [note](https://example.com/noted)d details" in cleaned_markdown
+    assert "The [O](https://example.com/oauth)*[Auth](https://example.com/oauth)* flow" in cleaned_markdown
+    assert "![Alt text](https://example.com/image.png)" in cleaned_markdown
+
+
+def test_convert_html_to_markdown_nested_span_whitespace_stripping():
+    """Verify nested elements inside anchor tags have leading/trailing whitespace stripped without early exit."""
+    html_content = '<p>Prefix<a href="https://example.com"> <span> nested text </span></a>Suffix</p>'
+    markdown_output = convert_html_to_markdown(html_content)
+
+    assert markdown_output is not None
+    assert "Prefix [nested text](https://example.com) Suffix" in markdown_output
+
+
+def test_normalize_markdown_preserves_legitimate_url_labeled_links():
+    """Verify legitimate URL-labeled links in bullet points, quotes, and sentences are never deleted."""
+    raw_markdown = (
+        "• RocksDB: [https://rocksdb.org](https://rocksdb.org)\n\n"
+        "Paperback edition: [https://geni.us/XxCd](https://geni.us/XxCd)\n\n"
+        "> Reference: [https://vimeo.com/123](https://vimeo.com/123)\n\n"
+        "*See [https://example.com](https://example.com)*\n\n"
+        "My good friend [https://www.linkedin.com/in/ericcheng26/](https://www.linkedin.com/in/ericcheng26/) Eric Cheng"
+    )
+    cleaned_markdown = normalize_markdown(raw_markdown)
+
+    assert "• RocksDB: [https://rocksdb.org](https://rocksdb.org)" in cleaned_markdown
+    assert "Paperback edition: [https://geni.us/XxCd](https://geni.us/XxCd)" in cleaned_markdown
+    assert "> Reference: [https://vimeo.com/123](https://vimeo.com/123)" in cleaned_markdown
+    assert "*See [https://example.com](https://example.com)*" in cleaned_markdown
+    assert (
+        "My good friend [https://www.linkedin.com/in/ericcheng26/](https://www.linkedin.com/in/ericcheng26/) Eric Cheng"
+        in cleaned_markdown
+    )
+
+
+def test_normalize_markdown_short_word_boundary_spacing():
+    """Verify missing space before common 1-3 letter English function words is restored."""
+    raw_markdown = (
+        "Check [Linear](https://linear.app)for agentic creation.\n"
+        "Check **[Linear](https://linear.app)**for agentic creation.\n"
+        "The *[study](https://example.com)*is interesting.\n"
+        "Read [Part 1](https://example.com/1)and [Part 2](https://example.com/2).\n"
+        "Use [Platform](https://example.com/p)to learn.\n"
+        "Leader [Author](https://example.com/a)is an executive.\n"
+        "The [note](https://example.com/n)d and [test](https://example.com/t)ed features."
+    )
+    cleaned_markdown = normalize_markdown(raw_markdown)
+
+    assert "Check [Linear](https://linear.app) for agentic creation." in cleaned_markdown
+    assert "Check **[Linear](https://linear.app)** for agentic creation." in cleaned_markdown
+    assert "The *[study](https://example.com)* is interesting." in cleaned_markdown
+    assert "Read [Part 1](https://example.com/1) and [Part 2](https://example.com/2)." in cleaned_markdown
+    assert "Use [Platform](https://example.com/p) to learn." in cleaned_markdown
+    assert "Leader [Author](https://example.com/a) is an executive." in cleaned_markdown
+    assert "The [note](https://example.com/n)d and [test](https://example.com/t)ed features." in cleaned_markdown
+
+
+def test_normalize_markdown_adjacent_duplicate_phantom_links():
+    """Verify duplicate phantom links sharing the same target URL are stripped."""
+    raw_markdown = (
+        "try this.[https://fandf.co/123](https://fandf.co/123)**[Read the write-up](https://fandf.co/123)**\n\n"
+        "**[real](https://example.com)[https://example.com](https://example.com)**\n\n"
+        "*We previously covered[https://uber.com](https://uber.com)*[how Uber moved](https://uber.com)*\n\n"
+        "- **[OpenAI](https://cdn.openai.com/ai.pdf)*****[Guide](https://cdn.openai.com/ai.pdf)***"
+        "[https://cdn.openai.com/ai.pdf](https://cdn.openai.com/ai.pdf)- 24-page report"
+    )
+    cleaned_markdown = normalize_markdown(raw_markdown)
+
+    assert "try this. **[Read the write-up](https://fandf.co/123)**" in cleaned_markdown
+    assert "**[real](https://example.com)**" in cleaned_markdown
+    assert "*We previously covered* *[how Uber moved](https://uber.com)*" in cleaned_markdown
+    assert (
+        "- **[OpenAI](https://cdn.openai.com/ai.pdf)** ***[Guide](https://cdn.openai.com/ai.pdf)*** - 24-page report"
+        in cleaned_markdown
+    )

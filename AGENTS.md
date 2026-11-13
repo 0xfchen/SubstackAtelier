@@ -114,7 +114,7 @@ flowchart LR
 - [`scraper/substack.py`](scraper/substack.py): Concrete `SubstackScraper` class receiving an injected `PageFetcher` and coordinating post scraping and sync loops.
 - [`scraper/cli.py`](scraper/cli.py): CLI argument parser, `_build_page_fetcher`, and execution coordinator managing deterministic cleanup via `contextlib.ExitStack`.
 - [`reader/`](reader/): Static Astro reader based on Astro Tone, ingesting `../content/**/posts/*.{md,mdx}` with full-text search (Pagefind), tag filtering, syntax highlighting, and dark mode.
-- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (205 tests across per-module files).
+- [`tests/`](tests/): Modular unit and integration test suite mirroring the package layout (217 tests across per-module files).
 
 ## Project Structure & Outputs
 - `content/<author>/posts/<slug>.md`: Scraped markdown files with rich YAML frontmatter.
