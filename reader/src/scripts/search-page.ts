@@ -19,11 +19,17 @@ declare global {
 function loadPagefindCss() {
   if (document.querySelector('link[data-pagefind-ui-css]')) return;
 
-  const link = document.createElement('link');
-  link.href = withBase('/pagefind/pagefind-ui.css');
-  link.rel = 'stylesheet';
-  link.dataset.pagefindUiCss = 'true';
-  document.head.append(link);
+  const stylesheetLink = document.createElement('link');
+  stylesheetLink.href = withBase('/pagefind/pagefind-ui.css');
+  stylesheetLink.rel = 'stylesheet';
+  stylesheetLink.dataset.pagefindUiCss = 'true';
+
+  const firstStyleElement = document.head.querySelector('link[rel="stylesheet"], style');
+  if (firstStyleElement) {
+    document.head.insertBefore(stylesheetLink, firstStyleElement);
+  } else {
+    document.head.append(stylesheetLink);
+  }
 }
 
 async function loadPagefindUi() {
@@ -49,26 +55,59 @@ async function loadPagefindUi() {
   });
 }
 
+export function bindSearchInputInteractions(searchRootElement: ParentNode) {
+  const searchInputElement = searchRootElement.querySelector<HTMLInputElement>(
+    '.pagefind-ui__search-input',
+  );
+  const clearButtonElement = searchRootElement.querySelector<HTMLButtonElement>(
+    '.pagefind-ui__search-clear',
+  );
+  if (!searchInputElement || !clearButtonElement) return;
+
+  clearButtonElement.setAttribute('aria-label', 'Clear search');
+
+  searchInputElement.addEventListener(
+    'keydown',
+    (keyboardEvent: KeyboardEvent) => {
+      if (keyboardEvent.key !== 'Escape' || searchInputElement.value === '') return;
+
+      keyboardEvent.preventDefault();
+      keyboardEvent.stopPropagation();
+      keyboardEvent.stopImmediatePropagation?.();
+      clearButtonElement.click();
+      searchInputElement.value = '';
+      searchInputElement.focus();
+    },
+    { capture: true },
+  );
+
+  clearButtonElement.addEventListener('click', () => {
+    searchInputElement.value = '';
+    searchInputElement.focus();
+  });
+}
+
 async function initSearchPage() {
-  const el = document.getElementById('search');
-  if (!el || el.dataset.pagefindReady === 'true') return;
-  el.dataset.pagefindReady = 'true';
+  const searchRootElement = document.getElementById('search');
+  if (!searchRootElement || searchRootElement.dataset.pagefindReady === 'true') return;
+  searchRootElement.dataset.pagefindReady = 'true';
   try {
     await loadPagefindUi();
     if (!window.PagefindUI) throw new Error('Pagefind UI failed to load');
-    el.replaceChildren();
+    searchRootElement.replaceChildren();
     new window.PagefindUI({
       element: '#search',
       showSubResults: true,
       translations: {
-        placeholder: 'Search posts...',
-        zero_results: 'No results for [QUERY]',
+        placeholder: 'Search articles or topics...',
+        zero_results: 'No results for [SEARCH_TERM]',
       },
     });
-    el.setAttribute('aria-busy', 'false');
+    bindSearchInputInteractions(searchRootElement);
+    searchRootElement.setAttribute('aria-busy', 'false');
   } catch {
-    el.setAttribute('aria-busy', 'false');
-    el.textContent = 'Search is available after a production build.';
+    searchRootElement.setAttribute('aria-busy', 'false');
+    searchRootElement.textContent = 'Search is available after a production build.';
   }
 }
 
