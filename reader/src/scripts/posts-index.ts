@@ -219,12 +219,84 @@ export function calculateScrollTarget(
 }
 
 /**
+ * Synchronize the sticky library dock position with the auto-hiding site header
+ * and toggle `.is-stuck` when the dock is pinned at the top of the viewport.
+ */
+export function syncStickyDockState(
+  stickyDock: HTMLElement,
+  siteHeader: HTMLElement | null,
+  scrollY = typeof window !== 'undefined' ? window.scrollY : 0
+): void {
+  const isHeaderHidden = siteHeader?.classList.contains('is-hidden') ?? false;
+  stickyDock.style.setProperty(
+    '--sticky-dock-top',
+    isHeaderHidden ? '0px' : 'var(--nav-height, 52px)'
+  );
+
+  const headerHeight = siteHeader
+    ? siteHeader.getBoundingClientRect().height || 52
+    : 0;
+  const stickyThreshold = siteHeader ? headerHeight : 0;
+  const dockBoundingRect = stickyDock.getBoundingClientRect();
+  const isStuck = scrollY > 0 && dockBoundingRect.top <= stickyThreshold + 1;
+  stickyDock.classList.toggle('is-stuck', isStuck);
+}
+
+/**
+ * Mount listeners and observers to coordinate `.library-sticky-dock` with `.site-header`.
+ */
+function mountStickyDock(): () => void {
+  const stickyDock = document.querySelector<HTMLElement>('[data-sticky-dock]');
+  if (!stickyDock) return () => {};
+
+  const siteHeader = document.querySelector<HTMLElement>('.site-header');
+  const syncDock = () => syncStickyDockState(stickyDock, siteHeader);
+
+  syncDock();
+
+  if (siteHeader && typeof MutationObserver !== 'undefined') {
+    const headerObserver = new MutationObserver(() => {
+      syncDock();
+    });
+    headerObserver.observe(siteHeader, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+  }
+
+  let isSyncScheduled = false;
+  const scheduleDockSync = () => {
+    if (!isSyncScheduled) {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          syncDock();
+          isSyncScheduled = false;
+        });
+      } else {
+        syncDock();
+        isSyncScheduled = false;
+      }
+      isSyncScheduled = true;
+    }
+  };
+
+  window.addEventListener('scroll', scheduleDockSync, { passive: true });
+  window.addEventListener('resize', scheduleDockSync, { passive: true });
+
+  return syncDock;
+}
+
+/**
  * Initialize the reading table on the posts index page.
  * Handles status filtering, search, author filtering, sorting,
  * and lazy-loads rows dynamically as the user scrolls down the page.
  */
 export function initReadingTable(): void {
   if (typeof document === 'undefined') return;
+
+  const syncDock = mountStickyDock();
+  const stickyDock = document.querySelector<HTMLElement>('[data-sticky-dock]');
+  const siteHeader = document.querySelector<HTMLElement>('.site-header');
 
   const table = document.querySelector<HTMLTableElement>('[data-reading-table]');
   if (!table) return;
@@ -492,6 +564,21 @@ export function initReadingTable(): void {
 
   // --- Event listeners ---
 
+  function alignTableTopBelowStickyDock(): void {
+    if (typeof window === 'undefined' || !stickyDock || !table) return;
+    const tableContainer = table.closest<HTMLElement>('.table-container') || table;
+    const tableBoundingRect = tableContainer.getBoundingClientRect();
+    const dockBoundingRect = stickyDock.getBoundingClientRect();
+    if (tableBoundingRect.top < dockBoundingRect.bottom) {
+      const targetScrollY = Math.max(
+        0,
+        window.scrollY + tableBoundingRect.top - dockBoundingRect.bottom - 12
+      );
+      window.scrollTo({ top: targetScrollY, behavior: 'instant' });
+      syncDock();
+    }
+  }
+
   statusTabs.forEach((tab) => {
     tab.addEventListener('click', () => {
       statusTabs.forEach((t) => {
@@ -502,22 +589,26 @@ export function initReadingTable(): void {
       tab.setAttribute('aria-pressed', 'true');
       currentStatusFilter = tab.dataset.statusFilter || 'all';
       renderTable();
+      alignTableTopBelowStickyDock();
     });
   });
 
   searchInput?.addEventListener('input', () => {
     currentSearch = searchInput.value.trim().toLowerCase();
     renderTable();
+    alignTableTopBelowStickyDock();
   });
 
   authorSelect?.addEventListener('change', () => {
     currentAuthor = authorSelect.value;
     renderTable();
+    alignTableTopBelowStickyDock();
   });
 
   timeSelectElement?.addEventListener('change', () => {
     currentTimeFilter = timeSelectElement.value;
     renderTable();
+    alignTableTopBelowStickyDock();
   });
 
   table?.querySelectorAll<HTMLElement>('.sortable').forEach((th) => {
@@ -529,7 +620,7 @@ export function initReadingTable(): void {
 
   window.addEventListener(READING_STATUS_CHANGE_EVENT, () => {
     updateStats();
-    renderTable();
+    renderTable(renderedCount);
   });
 
   let hasRestoredTarget = false;
@@ -630,14 +721,26 @@ export function initReadingTable(): void {
     }
 
     // 1. Restore exact scroll coordinate immediately if available (Option 2)
+    const stickyDockHeight = stickyDock
+      ? stickyDock.getBoundingClientRect().height
+      : 0;
+    const visibleHeaderHeight =
+      siteHeader && !siteHeader.classList.contains('is-hidden')
+        ? siteHeader.getBoundingClientRect().height || 52
+        : 0;
+    const effectiveHeaderOffset =
+      stickyDockHeight > 0 ? stickyDockHeight + visibleHeaderHeight + 16 : 80;
+
     const targetScroll = calculateScrollTarget(
       savedState?.scrollY,
       targetRow ? targetRow.getBoundingClientRect().top : undefined,
-      typeof window !== 'undefined' ? window.scrollY : 0
+      typeof window !== 'undefined' ? window.scrollY : 0,
+      effectiveHeaderOffset
     );
 
     if (targetScroll !== null && typeof window !== 'undefined') {
       window.scrollTo({ top: targetScroll, behavior: 'instant' });
+      syncDock();
       hasRestoredTarget = true;
     }
 

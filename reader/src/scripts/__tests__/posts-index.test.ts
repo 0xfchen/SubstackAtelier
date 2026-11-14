@@ -8,6 +8,7 @@ import {
   matchesRow,
   matchesTimeCategory,
   calculateScrollTarget,
+  syncStickyDockState,
   initReadingTable,
   POSTS_TABLE_STATE_KEY,
   type TableViewState,
@@ -358,6 +359,110 @@ describe('posts-index state caching and row restoration', () => {
 
     it('returns null when neither savedScrollY nor targetRectTop are available', () => {
       expect(calculateScrollTarget()).toBeNull();
+    });
+  });
+
+  describe('syncStickyDockState()', () => {
+    function createFakeElement(options: {
+      classes?: string[];
+      rectTop?: number;
+      rectHeight?: number;
+    }) {
+      const classSet = new Set(options.classes ?? []);
+      const styleMap = new Map<string, string>();
+      return {
+        classList: {
+          contains: (name: string) => classSet.has(name),
+          toggle: (name: string, force?: boolean) => {
+            if (force === undefined) {
+              if (classSet.has(name)) classSet.delete(name);
+              else classSet.add(name);
+            } else if (force) {
+              classSet.add(name);
+            } else {
+              classSet.delete(name);
+            }
+          },
+        },
+        style: {
+          setProperty: (prop: string, value: string) => styleMap.set(prop, value),
+          getPropertyValue: (prop: string) => styleMap.get(prop) ?? '',
+        },
+        getBoundingClientRect: () => ({
+          top: options.rectTop ?? 0,
+          height: options.rectHeight ?? 0,
+        }),
+      } as unknown as HTMLElement;
+    }
+
+    it('docks below visible site header and stays unstuck at top of page', () => {
+      const stickyDock = createFakeElement({ rectTop: 180 });
+      const siteHeader = createFakeElement({ rectHeight: 52 });
+
+      syncStickyDockState(stickyDock, siteHeader, 0);
+
+      expect(stickyDock.style.getPropertyValue('--sticky-dock-top')).toBe(
+        'var(--nav-height, 52px)'
+      );
+      expect(stickyDock.classList.contains('is-stuck')).toBe(false);
+    });
+
+    it('marks dock as stuck when scrolled to header threshold while header is visible', () => {
+      const stickyDock = createFakeElement({ rectTop: 52 });
+      const siteHeader = createFakeElement({ rectHeight: 52 });
+
+      syncStickyDockState(stickyDock, siteHeader, 240);
+
+      expect(stickyDock.style.getPropertyValue('--sticky-dock-top')).toBe(
+        'var(--nav-height, 52px)'
+      );
+      expect(stickyDock.classList.contains('is-stuck')).toBe(true);
+    });
+
+    it('transitions dock to 0px and marks stuck when site header is hidden', () => {
+      const stickyDock = createFakeElement({ rectTop: 0 });
+      const siteHeader = createFakeElement({
+        classes: ['is-hidden'],
+        rectHeight: 52,
+      });
+
+      syncStickyDockState(stickyDock, siteHeader, 400);
+
+      expect(stickyDock.style.getPropertyValue('--sticky-dock-top')).toBe('0px');
+      expect(stickyDock.classList.contains('is-stuck')).toBe(true);
+    });
+
+    it('keeps dock marked as stuck during the CSS top transition right after header hides', () => {
+      const stickyDock = createFakeElement({ rectTop: 52 });
+      const siteHeader = createFakeElement({
+        classes: ['is-hidden'],
+        rectHeight: 52,
+      });
+
+      syncStickyDockState(stickyDock, siteHeader, 320);
+
+      expect(stickyDock.style.getPropertyValue('--sticky-dock-top')).toBe('0px');
+      expect(stickyDock.classList.contains('is-stuck')).toBe(true);
+    });
+
+    it('does not mark dock as stuck when scrolled slightly before dock reaches threshold', () => {
+      const stickyDock = createFakeElement({ rectTop: 80 });
+      const siteHeader = createFakeElement({ rectHeight: 52 });
+
+      syncStickyDockState(stickyDock, siteHeader, 40);
+
+      expect(stickyDock.classList.contains('is-stuck')).toBe(false);
+    });
+
+    it('handles missing site header gracefully', () => {
+      const stickyDock = createFakeElement({ rectTop: 0 });
+
+      syncStickyDockState(stickyDock, null, 150);
+
+      expect(stickyDock.style.getPropertyValue('--sticky-dock-top')).toBe(
+        'var(--nav-height, 52px)'
+      );
+      expect(stickyDock.classList.contains('is-stuck')).toBe(true);
     });
   });
 

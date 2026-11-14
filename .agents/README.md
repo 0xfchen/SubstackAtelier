@@ -62,6 +62,7 @@ Unified, chronological index of all retroactively created issues and plans mappe
 | **`stm-054`** | **Issue** | `fix` | Fix Substack Image Placeholder Links and Heading SVG Labels | [`issues/stm-054-fix-substack-image-placeholder-links.md`](issues/stm-054-fix-substack-image-placeholder-links.md) |
 | **`stm-055`** | **Plan** | `feat` | Article Body Font Switcher (`FontToggle`) | [`plans/stm-055-article-body-font-switcher.md`](plans/stm-055-article-body-font-switcher.md) |
 | **`stm-056`** | **Issue** | `fix` | Preserve Whitespace Around Links and Strip Phantom Whitespace Links | [`issues/stm-056-preserve-link-boundary-whitespace.md`](issues/stm-056-preserve-link-boundary-whitespace.md) |
+| **`stm-057`** | **Plan** | `feat` | Sticky Library Table Controls and Stats Bar | [`plans/stm-057-sticky-library-table-controls.md`](plans/stm-057-sticky-library-table-controls.md) |
 
 ---
 
